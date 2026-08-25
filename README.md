@@ -25,7 +25,18 @@ here forks or patches `/usr/share/omarchy/`, so `omarchy update` stays safe.
 | Plugin | What it does |
 |---|---|
 | `ghost.barisland` | Paints a rounded floating plate behind the bar. Omarchy's bar cannot be detached from the screen edge, so the bar is made taller and transparent and this draws an island inside that band, on the layer below. |
-| `ghost.shotshelf` | Persistent screenshot shelf. Replaces the 5-second toast with a card that stays until dismissed and collapses to a chip instead of vanishing. Copy path, copy image, or open in an editor; a strip holds the last six. |
+
+
+### Screenshot shelf — `shotshelf/`
+
+![shelf](docs/preview-shotshelf.png)
+
+Replaces Omarchy's five-second screenshot toast with a shelf that stays until
+you dismiss it, collapses to a chip, fans out the last six shots, and lets you
+**drag the image straight into another application**.
+
+A GTK4 app rather than a Quickshell plugin, and that is forced — see
+[Notes on the screenshot shelf](#notes-on-the-screenshot-shelf).
 
 ### Theme — `themes/monochrome/`
 
@@ -34,8 +45,8 @@ slot. Near-black `#0a0a0b` base, cool ash `#dfe3e6` foreground.
 
 ## Install
 
-Requires Omarchy 4.x (Hyprland + Quickshell). `ghost.shotshelf` also needs
-`inotify-tools` and `wl-clipboard`.
+Requires Omarchy 4.x (Hyprland + Quickshell). The screenshot shelf also needs
+`gtk4`, `python-gobject`, `libadwaita` and `wl-clipboard`.
 
 ```bash
 git clone https://github.com/TheFadGhost/omarchy-monochrome
@@ -49,6 +60,13 @@ cp bar/modules/*.qml   ~/.config/omarchy/bar/modules/
 cp bar/scripts/sysmon  ~/.config/omarchy/bar/scripts/
 chmod +x ~/.config/omarchy/bar/scripts/sysmon
 cp -r plugins/ghost.*  ~/.config/omarchy/plugins/
+
+# Screenshot shelf (needs gtk4, python-gobject, libadwaita).
+mkdir -p ~/.local/share/ghost-shotshelf ~/.local/bin
+cp -r shotshelf/* ~/.local/share/ghost-shotshelf/
+cp bin/ghost-*    ~/.local/bin/
+chmod +x ~/.local/bin/ghost-* ~/.local/share/ghost-shotshelf/shim/*
+cp hypr/windows.lua ~/.config/hypr/          # then require("hypr.windows")
 cp -r themes/monochrome ~/.config/omarchy/themes/
 
 # The bar is made 44px tall so the island has room to float inside it.
@@ -81,19 +99,54 @@ rather than the importing file's directory.
 
 ## Notes on the screenshot shelf
 
-It cannot drag a file out, and that is not an oversight:
+### Why it is GTK4 and not Quickshell
 
-- QtQuick's `Drag` is scene-local only. Its `DragType` enum is
-  `None`/`Automatic`/`Internal` — there is no `External` — and Quickshell
-  registers no drag-and-drop types at all. Real cross-application drag needs
-  C++ calling `QDrag::exec()` on an `xdg_toplevel`, which a layer-shell surface
-  driven from QML cannot reach. A helper toplevel window is the only route, and
-  is how Flameshot does it.
-- Synthesising a paste does not work either, at least on Hyprland 0.56: `wtype`
-  exits 0 and delivers nothing.
+The shelf started as a Quickshell plugin (still in git history) and could never
+drag. Two independent blockers:
 
-So the clipboard does the work, which is reliable. `wl-copy` puts the path or
-the PNG where you need it and you paste normally.
+1. **QtQuick's `Drag` is scene-local.** Its `DragType` enum is
+   `None`/`Automatic`/`Internal` — there is no `External` — and Quickshell
+   registers no drag-and-drop types at all. Real cross-application drag needs
+   C++ calling `QDrag::exec()`.
+2. **The drag must not originate from a layer-shell surface.** wlroots
+   validates a drag against the seat's last pointer-button serial *and*
+   requires the origin surface to hold pointer focus; layer surfaces usually
+   hold neither. KWin has a filed crash for exactly this pattern (bug 502497),
+   and every app that drags files out on Wayland — Flameshot, Nautilus — uses
+   an ordinary `xdg_toplevel`.
+
+So the shelf is a normal toplevel window made to behave like an overlay, using
+the same Hyprland rules Omarchy's own webcam overlay uses (`float`, `pin`,
+`no_initial_focus`, `no_follow_mouse`). Focus stays where you were typing.
+
+### The one detail that makes the drag actually work
+
+```python
+Gdk.ContentProvider.new_for_value(Gio.File.new_for_path(path))   # WRONG
+Gdk.ContentProvider.new_for_value(Gdk.FileList.new_from_list([f]))  # right
+```
+
+The first is what most tutorials show. It is wrong: the GValue carries the
+concrete type `GLocalFile`, GDK registers its serialisers against the `GFile`
+*interface*, nothing matches, and the drag advertises **zero** mime types — it
+looks completely correct and silently fails on every drop. Measured:
+
+```
+new_for_value(GFile)       -> ON THE WIRE: []
+new_for_value(GdkFileList) -> ['text/uri-list', 'text/plain;charset=utf-8',
+                               'application/vnd.portal.filetransfer', ...]
+```
+
+Check any change with
+`provider.ref_formats().union_serialize_mime_types().get_mime_types()`.
+
+### Replacing the stock toast
+
+`bin/ghost-capture` runs Omarchy's own `omarchy-capture-screenshot` with a
+directory prepended to `PATH` holding a no-op `omarchy-notification-send`.
+Scoped to that one process tree, so every other Omarchy notification still
+works. Bind `PRINT` to it — and call `hl.unbind("PRINT")` first, or Hyprland
+keeps both binds and fires two captures.
 
 ## Documentation
 

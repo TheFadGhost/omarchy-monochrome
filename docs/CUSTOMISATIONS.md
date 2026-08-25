@@ -318,43 +318,97 @@ color: Qt.darker(foreground, 1.4)`. `mediapill.qml`'s panel copies exactly this.
 runs under the card border and is clipped. Truncate the string in JS before
 handing it to `text:` (see `mediapill.qml`'s `sourceLabel()`).
 
-### 6e. Screenshot shelf — `~/.config/omarchy/plugins/ghost.shotshelf/`
+### 6e. Screenshot shelf — `~/.local/share/ghost-shotshelf/`
 
-Replaces the 5s screenshot toast with a shelf that persists until dismissed and
-**collapses to a chip instead of vanishing**. Registered in `shell.json`
-`plugins[]` as `ghost.shotshelf`; kind `service`, entry point `Shelf.qml`.
+Replaces Omarchy's five-second screenshot toast with a shelf that persists
+until dismissed, collapses to a chip, fans out multiple shots, and — the whole
+reason it exists — lets you **drag the image out into another application**.
 
-- Detection is `inotifywait -m -e close_write -e moved_to` on the screenshot
-  directory, so **every** capture route is covered — PRINT, the region picker,
-  the Omarchy menu — rather than only a wrapped command. `close_write`, not
-  `create`, or it would race grim's own write and read a half-written PNG. A 5s
-  supervisor timer restarts `inotifywait` if it ever dies.
-- Actions: **Copy path**, **Copy image**, **Edit**. Left-click a strip thumbnail
-  to select it, right-click one to drop it, `✕` or right-click the chip to clear.
-- Auto-collapses after 6s; hovering the card cancels that so it cannot fold
-  away mid-reach.
+**It is a GTK4/PyGObject app, not a Quickshell plugin, and that is forced.**
+An earlier Quickshell version of this lives in git history; it could never
+drag. Two independent blockers:
 
-**Drag-out is not possible, and this was tested, not assumed:**
+1. QtQuick's `Drag` is scene-local. `DragType` is `None`/`Automatic`/`Internal`
+   — no `External` — and Quickshell registers no DnD types at all. Real
+   cross-app drag needs C++ `QDrag::exec()`.
+2. The drag must not originate from a **layer-shell** surface. wlroots
+   validates a drag against the seat's last pointer-button serial *and*
+   requires the origin surface to hold pointer focus; layer surfaces typically
+   hold neither. KWin has a filed crash for exactly this pattern (bug 502497),
+   and every app that drags files out on Wayland — Flameshot, Nautilus — uses
+   an ordinary `xdg_toplevel`.
 
-1. QtQuick's `Drag` is scene-local only — `DragType` is `None/Automatic/Internal`,
-   there is no `External` — and Quickshell registers no DnD types at all
-   (`grep -ir drag` over its qmltypes returns nothing). Genuine cross-app drag
-   needs C++ `QDrag::exec()` on an `xdg_toplevel`; a layer-shell surface driven
-   from QML cannot reach it. The only real route would be a helper toplevel
-   window, which is how Flameshot does it.
-2. Synthesising a paste also fails here. **`wtype` exits 0 but delivers nothing**
-   — verified by typing into a focused throwaway `foot` window and screen-
-   grabbing it; the terminal stayed empty. Wayland access itself is fine
-   (`wl-copy`/`wl-paste` round-trip cleanly), so this is `wtype` vs this
-   compositor. Hyprland 0.56 *does* have `hl.dsp.send_shortcut`, but it rejects
-   `{mods=,key=}` with `"key not found"` and the field name is undocumented.
+So the shelf is a normal toplevel made to behave like an overlay, via
+`~/.config/hypr/windows.lua` (same pattern as Omarchy's `webcam-overlay.lua`):
+`float`, `pin`, `no_initial_focus`, `no_follow_mouse`, `border_size = 0`,
+`rounding = 0`, fixed `size`/`move`. **Verified: focus stays on the terminal
+underneath** when a screenshot arrives.
 
-So the clipboard does the work. `wl-copy` is the verified mechanism.
+| Piece | Path |
+|---|---|
+| App | `~/.local/share/ghost-shotshelf/shotshelf.py` |
+| Launcher | `~/.local/bin/ghost-shotshelf` (autostarted) |
+| Capture wrapper | `~/.local/bin/ghost-capture` |
+| Toast shim | `~/.local/share/ghost-shotshelf/shim/omarchy-notification-send` |
+| Window rules | `~/.config/hypr/windows.lua` |
 
-**Gotcha:** the `Item` used as a `PanelWindow`'s `mask:` region must **not** be
-animated — a mask change re-sends a Wayland input region to the compositor, and
-animating it does so every frame. Put the expand/collapse motion on the card and
-chip (opacity/scale) and leave the mask item's size a plain binding.
+**THE detail that makes the drag work.** `Gdk.ContentProvider.new_for_value(Gio.File(...))`
+is what every tutorial shows and it is **wrong**: the GValue carries the
+concrete type `GLocalFile`, GDK registers its serialisers against the `GFile`
+*interface*, nothing matches, and the drag advertises **zero** mime types — it
+looks perfect and silently fails on every drop. Measured here:
+
+```
+new_for_value(GFile)       -> ON THE WIRE: []
+new_for_value(GdkFileList) -> ['text/uri-list', 'text/plain;charset=utf-8',
+                               'application/vnd.portal.filetransfer', ...]
+```
+
+Use `Gdk.FileList`. Verify any change with
+`provider.ref_formats().union_serialize_mime_types().get_mime_types()`.
+
+**Replacing the toast.** `ghost-capture` runs Omarchy's own
+`omarchy-capture-screenshot` with a directory prepended to `PATH` containing a
+no-op `omarchy-notification-send`. Scoped to that process tree only, so every
+other Omarchy notification is untouched. `PRINT` is rebound to it in
+`bindings.lua` — and **`hl.unbind("PRINT")` first**, because Hyprland keeps
+both binds otherwise and fires two captures. A/B verified: stock shows the
+toast, wrapped shows nothing.
+
+Detection is a `Gio.FileMonitor` on the screenshot directory keyed on
+`CHANGES_DONE_HINT` (not `CREATED`, which fires while grim is still writing),
+so captures started any other way — the Omarchy menu — still reach the shelf;
+they just also show the stock toast.
+
+**Gotchas:**
+
+- **`Gtk.Picture`'s natural size is the image's real size**, and natural beats
+  `set_size_request`, which is only a *minimum*. A 1920px screenshot inflates
+  the whole card to fill the window. Load a pre-scaled texture at exactly the
+  display size (`GdkPixbuf.new_from_file_at_scale`) — which also avoids holding
+  full-resolution textures for 58px thumbnails on an 8 GB machine.
+- **A hidden widget cannot transition.** The expand/collapse is a CSS
+  `transition` on `opacity` and `transform` with the two surfaces stacked in a
+  `Gtk.Overlay`; both stay mapped and the inactive one gets
+  `set_can_target(False)` so it never eats a click.
+- The window is a fixed 1000x300 transparent canvas; the app sets a Wayland
+  **input region** around the visible card so the empty area stays
+  click-through. Keeping the window size constant means Hyprland never has to
+  reposition it as the card grows and shrinks.
+- Fonts and colours are read at runtime from `omarchy-font-current` and the
+  *current* theme's `colors.toml`, so the shelf follows `omarchy theme set`.
+
+**What cannot be scripted:** there is no way to synthesise a pointer button on
+this setup, so the drag gesture itself must be tested by hand. `wtype` exits 0
+and delivers nothing; Hyprland 0.56 exposes `hl.dsp.send_key_state`
+(`{mods, key, state}`) and `hl.dsp.send_shortcut`, but both are keyboard-only —
+`BTN_LEFT`/`mouse:272` return `ok` and produce no click, confirmed against a
+GTK button that logs its clicks. `hl.dsp.cursor` has only `move` and
+`move_to_corner`. Enumerate dispatchers with:
+
+```bash
+hyprctl eval 'local f=io.open("/tmp/d","w") local t={} for k in pairs(hl.dsp) do t[#t+1]=tostring(k) end table.sort(t) f:write(table.concat(t,"\n")) f:close() return "x"'
+```
 
 ### 6c. Bar layout
 
@@ -424,7 +478,11 @@ Stock themes are untouched; `omarchy theme set "Matte Black"` restores the old l
 ~/.config/omarchy/themes/monochrome/                                  (NEW)
 ~/.config/omarchy/bar/modules/{sysmon,pomodoro,notes}.qml             (NEW)
 ~/.config/omarchy/bar/modules/mediapill.qml   replaces omarchy.media  (NEW)
-~/.config/omarchy/plugins/ghost.shotshelf/                             (NEW)
+~/.local/share/ghost-shotshelf/       GTK4 screenshot shelf app       (NEW)
+~/.local/bin/{ghost-shotshelf,ghost-capture}                          (NEW)
+~/.config/hypr/windows.lua           shelf window rules              (NEW)
+~/.config/hypr/bindings.lua          PRINT rebound to ghost-capture
+~/.config/hypr/autostart.lua         ghost-shotshelf on login
 ~/.config/omarchy/bar/scripts/sysmon                                  (NEW)
 ~/.config/omarchy/plugins/ghost.barisland/                            (NEW)
 ~/.local/state/omarchy/powerprofiles/ac                               (NEW)
@@ -449,7 +507,8 @@ hyprctl reload
 cp ~/.config/omarchy/shell.json.bak.1787616894 ~/.config/omarchy/shell.json
 rm -f ~/.config/omarchy/shell.toml
 rm -rf ~/.config/omarchy/plugins/ghost.barisland ~/.config/omarchy/bar
-rm -rf ~/.config/omarchy/plugins/ghost.shotshelf
+rm -rf ~/.local/share/ghost-shotshelf ~/.local/bin/ghost-shotshelf ~/.local/bin/ghost-capture
+rm -f ~/.config/hypr/windows.lua   # and drop require("hypr.windows") from hyprland.lua
 omarchy restart shell
 
 # Theme

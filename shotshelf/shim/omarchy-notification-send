@@ -1,0 +1,8 @@
+#!/bin/bash
+# No-op stand-in for omarchy-notification-send.
+#
+# Only ever reachable from ghost-capture, which prepends this directory to PATH
+# for the capture command alone. The screenshot shelf replaces that toast, and
+# two notifications for one screenshot is worse than none. Every other Omarchy
+# notification is untouched, because nothing else sees this directory.
+exit 0

@@ -1,0 +1,13 @@
+#!/bin/bash
+# Run Omarchy's screenshot capture, minus its five-second toast.
+#
+# The toast is suppressed by shadowing omarchy-notification-send on PATH for
+# this process tree only -- omarchy-capture-screenshot calls it by name, and
+# the region picker it spawns inherits the same PATH. Everything else about the
+# capture (grim, slurp, the clipboard copy, the editor hint) is unchanged.
+#
+# ghost-shotshelf notices the new file by watching the screenshot directory, so
+# it does not depend on this wrapper -- captures started any other way still
+# reach the shelf, they just also show Omarchy's own toast.
+exec env PATH="$HOME/.local/share/ghost-shotshelf/shim:$PATH" \
+  omarchy-capture-screenshot "$@"
