@@ -30,3 +30,12 @@ o.window({ class = sill }, {
   rounding = 0,             -- the panel draws its own corners in CSS
   opacity = "1 1",
 })
+
+-- Ghost Settings TUI: float from all three entry points (keybind, terminal
+-- via launch-or-focus, .desktop) -- same app-id everywhere. 1040x720 ~= a
+-- 104x34-cell foot window, comfortably above the TUI's 84x24 full layout.
+o.window({ class = "^ghost-settings$" }, {
+  float = true,
+  size = "1040 720",
+  center = true,
+})

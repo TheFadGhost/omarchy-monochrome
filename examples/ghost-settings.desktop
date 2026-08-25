@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Ghost Settings
+Comment=Configure sill and the bar widgets
+Exec=xdg-terminal-exec --app-id=ghost-settings -e ghost-settings
+Icon=preferences-system
+Categories=Settings;
+Terminal=false

@@ -59,3 +59,10 @@ end
 -- profile, so they keep voxtype's default output mode and post-processing.
 -- SUPER+ALT+L was verified free against `hyprctl binds` before binding.
 o.bind("SUPER + ALT + L", "Talk to Luna", "voxtype record toggle --profile luna")
+
+-- Ghost Settings TUI (CUSTOMISATIONS.md §9). SUPER+COMMA was bound by
+-- Omarchy to "Dismiss last notification" -- deliberately traded for the
+-- settings key (notifications keep SUPER+SHIFT+COMMA for dismiss-all).
+hl.unbind("SUPER + COMMA")
+o.bind("SUPER + COMMA", "Ghost settings",
+       "omarchy-launch-or-focus-tui --app-id=ghost-settings ghost-settings")

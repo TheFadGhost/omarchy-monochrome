@@ -942,6 +942,45 @@ implemented and is on by default, but its own effect is within noise
 ($0.0232 vs $0.0289 over three turns) - it is kept for conversational
 continuity, not for the money.
 
+## 8b. Ghost Settings — the settings TUI (`ghost-settings`)
+
+One curses TUI for every custom piece of the desktop: Sill (position, expand
+behaviour, screenshots, privacy denylist) and the four bar widgets + drawer.
+Python 3 **stdlib only** (`curses` + `tomllib`) — no Textual/Rich/urwid.
+
+- **Code** `~/.local/share/ghost-settings/` — `main.py` (CLI), `schema.py`
+  (SPEC, the single source of truth, 55 keys), `config.py` (load / clamp /
+  atomic save / TOML emitter), `theme.py`, `tui/{app,draw,widgets,screens}.py`.
+  `schema.py` + `config.py` are ALSO imported by Sill's
+  `~/.local/share/sill/config.py` shim — changing their API breaks Sill.
+- **Config** `~/.config/ghost/settings.toml`. The TUI stages edits in memory;
+  `s` saves everything atomically (temp file + `os.replace`, one inotify
+  event). The emitter regenerates the file with comments from the schema;
+  unknown keys are preserved in a trailing block. Every save refreshes
+  `settings.toml.bak` (last-known-good) first.
+- **Launch** three ways, all one window (same app-id, float rule in
+  `windows.lua`): `ghost-settings` in a terminal · **SUPER+COMMA**
+  (launch-or-focus) · "Ghost Settings" in the app launcher (.desktop entry).
+  **Trade-off:** SUPER+COMMA was Omarchy's "Dismiss last notification" — it
+  is `hl.unbind`-ed in `bindings.lua`; dismiss-all stays on SUPER+SHIFT+COMMA.
+- **CLI** `ghost-settings get|set|dump --json|check|keys`. `set` validates and
+  clamps exactly like the TUI; `dump --json` is what QML bar modules should
+  consume (no TOML parser in QML). `check` exits 1 with the parse-error line.
+- **Live apply**: save *is* apply — Sill (and later the bar) watch the file.
+  The position picker's Space preview writes the candidate through the normal
+  save path and restores the previous bytes on release, so the real desktop
+  jumps and returns.
+- **Robustness**: three layouts (full ≥84×24, stacked ≥60×18, tiny = notice);
+  corrupt config opens a recovery screen (edit in $EDITOR / restore backup /
+  stage defaults) and never touches the broken file until an explicit save;
+  out-of-range values clamp on load; NO_COLOR / 8-colour / non-UTF-8 degrade
+  to attributes and ASCII glyphs; Ctrl+C never leaves a broken terminal.
+- Single instance via `$XDG_RUNTIME_DIR/ghost/ghost-settings.pid`.
+
+Undo: see §10 — delete the three installed paths and the two Lua blocks.
+
+---
+
 ## 9. Full inventory of changed/created files
 
 ```
@@ -985,6 +1024,12 @@ continuity, not for the money.
 ~/.config/voxtype/config.toml         + [profiles.luna] ONLY (additive)
 ~/.config/voxtype/config.toml.pre-luna  byte-identical backup                 (NEW)
 ~/.config/hypr/bindings.lua           + SUPER+ALT+L "Talk to Luna"
+~/.local/share/ghost-settings/       settings TUI + schema + CLI (Sill imports schema/config) (NEW)
+~/.local/bin/ghost-settings          launcher                        (NEW)
+~/.local/share/applications/ghost-settings.desktop                   (NEW)
+~/.config/hypr/bindings.lua          + SUPER+COMMA Ghost Settings (Omarchy
+                                     dismiss-last-notification unbound)
+~/.config/hypr/windows.lua           + ghost-settings float rule
 ```
 
 Nothing under `/usr/share/omarchy/` was modified, no Hyprland plugin installed,
@@ -1010,6 +1055,13 @@ rm -f ~/.config/systemd/user/sill.service
 rm -rf ~/.local/share/sill ~/.local/bin/sill ~/.local/bin/ghost-capture ~/.config/ghost
 rm -f ~/.config/hypr/windows.lua   # and drop require("hypr.windows") from hyprland.lua
 omarchy restart shell
+
+# Ghost Settings TUI
+rm -rf ~/.local/share/ghost-settings ~/.local/bin/ghost-settings
+rm -f ~/.local/share/applications/ghost-settings.desktop
+# then delete the SUPER+COMMA block at the end of bindings.lua (restores
+# Omarchy's dismiss-last-notification) and the ghost-settings rule at the
+# end of windows.lua; hyprctl reload
 
 # Theme
 omarchy theme set "Matte Black"
