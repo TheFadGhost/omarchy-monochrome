@@ -59,9 +59,20 @@ COLLAPSE_DELAY = 6.0
 WIN_W, WIN_H = 1000, 300
 
 HOME = os.path.expanduser("~")
-SHOT_DIR = os.environ.get("OMARCHY_SCREENSHOT_DIR") or os.path.join(HOME, "Pictures")
+# Mirror omarchy-capture-screenshot's own fallback chain exactly:
+#   ${OMARCHY_SCREENSHOT_DIR:-${XDG_PICTURES_DIR:-$HOME/Pictures}}
+# Skipping XDG_PICTURES_DIR made the shelf watch a directory grim never wrote to.
+SHOT_DIR = (
+    os.environ.get("OMARCHY_SCREENSHOT_DIR")
+    or os.environ.get("XDG_PICTURES_DIR")
+    or os.path.join(HOME, "Pictures")
+)
 EDITOR = os.environ.get("OMARCHY_SCREENSHOT_EDITOR", "tensaku-edit")
-THEME_DIR = os.path.join(HOME, ".config/omarchy/current/theme")
+# NOTE: the live theme symlink is under ~/.local/state, NOT ~/.config. The
+# ~/.config path does not exist; read_theme() swallowed the OSError and silently
+# fell back to the hardcoded palette, which happened to match, so the shelf
+# looked correct while never actually following `omarchy theme set`.
+THEME_DIR = os.path.join(HOME, ".local/state/omarchy/current/theme")
 
 FALLBACK = {
     "background": "#0a0a0b",
@@ -188,6 +199,12 @@ def thumb(path, w, h):
     return _THUMBS[key]
 
 
+def forget_thumbs(path):
+    """Drop every cached size of `path`. A deleted file must not keep painting."""
+    for key in [k for k in _THUMBS if k[0] == path]:
+        _THUMBS.pop(key, None)
+
+
 def pin(widget, w, h):
     """Pin both axes so a thumbnail stays a thumbnail."""
     widget.set_size_request(w, h)
@@ -218,6 +235,10 @@ class Shelf(Adw.Application):
         self.win = None
         self._collapse_id = 0
         self._hovering = False
+        self.css_provider = None
+        self.theme_monitor = None
+        self.theme_dir_monitor = None
+        self._theme_id = 0
 
     # ---------------- lifecycle ----------------
     def do_activate(self):
@@ -225,12 +246,8 @@ class Shelf(Adw.Application):
             self.win.present()
             return
 
-        self.colors = read_theme()
-        provider = Gtk.CssProvider()
-        provider.load_from_data(css_for(self.colors).encode())
-        Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
+        self.apply_theme()
+        self.start_theme_watch()
 
         self.win = Gtk.ApplicationWindow(application=self)
         self.win.set_decorated(False)
@@ -318,8 +335,19 @@ class Shelf(Adw.Application):
             s.set_icon(paintable, 32, 24)
             self.cancel_collapse()
 
+        # drag-begin cancels the collapse timer; nothing re-armed it, so the
+        # shelf stayed expanded forever after one drag. Re-arm on both outcomes.
+        def end(_s, _drag, _delete_data):
+            self.schedule_collapse()
+
+        def cancelled(_s, _drag, _reason):
+            self.schedule_collapse()
+            return False  # let GTK run its own drag-cancel animation
+
         src.connect("prepare", prepare)
         src.connect("drag-begin", begin)
+        src.connect("drag-end", end)
+        src.connect("drag-cancel", cancelled)
         widget.add_controller(src)
         return src
 
@@ -429,6 +457,7 @@ class Shelf(Adw.Application):
         self.render()
 
     def drop_shot(self, path):
+        forget_thumbs(path)
         if path in self.shots:
             self.shots.remove(path)
         self.selected = min(self.selected, max(0, len(self.shots) - 1))
@@ -575,6 +604,68 @@ class Shelf(Adw.Application):
         if cur:
             run_detached([EDITOR, cur])
 
+    # ---------------- theming ----------------
+    def apply_theme(self):
+        """(Re)build the CSS provider from the *current* theme."""
+        display = Gdk.Display.get_default()
+        if display is None:
+            return
+        self.colors = read_theme()
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css_for(self.colors).encode())
+        if self.css_provider is not None:
+            Gtk.StyleContext.remove_provider_for_display(display, self.css_provider)
+        Gtk.StyleContext.add_provider_for_display(
+            display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        self.css_provider = provider
+
+    def start_theme_watch(self):
+        """The CSS provider used to be built once in do_activate, so the shelf
+        kept the palette it started with across `omarchy theme set`.
+
+        omarchy-theme-set does `rm -rf current/theme && mv next current/theme`,
+        which destroys the directory a file monitor on colors.toml is watching.
+        So watch the STABLE parent (~/.local/state/omarchy/current) for the
+        swap, and additionally watch colors.toml itself for in-place edits,
+        re-arming that inner monitor after every rebuild."""
+        try:
+            parent = Gio.File.new_for_path(os.path.dirname(THEME_DIR))
+            self.theme_dir_monitor = parent.monitor_directory(
+                Gio.FileMonitorFlags.WATCH_MOVES, None
+            )
+            self.theme_dir_monitor.set_rate_limit(300)
+            self.theme_dir_monitor.connect("changed", self.on_theme_changed)
+        except GLib.Error:
+            self.theme_dir_monitor = None
+        self.arm_colors_watch()
+
+    def arm_colors_watch(self):
+        if self.theme_monitor is not None:
+            self.theme_monitor.cancel()
+            self.theme_monitor = None
+        try:
+            gfile = Gio.File.new_for_path(os.path.join(THEME_DIR, "colors.toml"))
+            self.theme_monitor = gfile.monitor_file(
+                Gio.FileMonitorFlags.WATCH_MOVES, None
+            )
+            self.theme_monitor.set_rate_limit(300)
+            self.theme_monitor.connect("changed", self.on_theme_changed)
+        except GLib.Error:
+            self.theme_monitor = None
+
+    def on_theme_changed(self, _m, _gfile, _other, _event):
+        # Coalesce the burst of events one theme swap produces into one rebuild.
+        if getattr(self, "_theme_id", 0):
+            return
+        self._theme_id = GLib.timeout_add(150, self._retheme_now)
+
+    def _retheme_now(self):
+        self._theme_id = 0
+        self.apply_theme()
+        self.arm_colors_watch()
+        return False
+
     # ---------------- watching ----------------
     def start_watch(self):
         gdir = Gio.File.new_for_path(SHOT_DIR)
@@ -592,6 +683,18 @@ class Shelf(Adw.Application):
             path = gfile.get_path()
             if path:
                 self.add_shot(path)
+            return
+
+        # A file removed behind our back (rm, a file manager, a moved-out drag
+        # target) otherwise lingers as a ghost thumbnail that silently fails to
+        # drag. Drop it from the strip and evict its cached textures.
+        if event in (
+            Gio.FileMonitorEvent.DELETED,
+            Gio.FileMonitorEvent.MOVED_OUT,
+        ):
+            path = gfile.get_path()
+            if path:
+                self.drop_shot(path)
 
 
 if __name__ == "__main__":

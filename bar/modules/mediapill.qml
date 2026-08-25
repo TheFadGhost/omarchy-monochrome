@@ -14,7 +14,7 @@ import qs.Commons
 //   click   panel with artwork, scrubbable timeline, volume, shuffle/repeat
 //           and a source switcher
 //
-// All colour comes from `bar.foreground` / `bar.background`, so it re-tints
+// All colour comes from `bar.barForeground` / `bar.background`, so it re-tints
 // itself whenever the Omarchy theme changes -- nothing is hardcoded except the
 // no-bar fallbacks. Artwork is desaturated to stay inside the greyscale rice
 // and only returns to full colour while the cursor is on it.
@@ -45,13 +45,12 @@ Item {
   readonly property bool hasMedia: !!player && (title !== "" || artist !== "")
 
   property bool hovered: false
-  property bool menuOpen: true
+  property bool menuOpen: false
   readonly property bool expanded: (hovered || menuOpen) && hasMedia
 
-  readonly property color fg: bar ? bar.foreground : "#dfe3e6"
+  readonly property color fg: bar ? bar.barForeground : "#dfe3e6"
   readonly property color bg: bar ? bar.background : "#0a0a0b"
   readonly property string mono: bar ? bar.fontFamily : "monospace"
-  readonly property var myWindow: root.QsWindow ? root.QsWindow.window : null
 
   function close() { menuOpen = false }
   function alpha(a) { return Qt.rgba(fg.r, fg.g, fg.b, a) }
@@ -72,10 +71,14 @@ Item {
   // The band is Style.bar.size-horizontal (44); ghost.barisland insets it by
   // 7px top and bottom, leaving ~30px of plate. Sizing off the band directly
   // makes the pill overflow the plate. Keep this in sync with Island.qml inset.
-  readonly property int islandInset: 7
+  readonly property int islandInset: Style.space(7)
   readonly property int pillH: Math.max(14, (bar ? bar.barSize : 26) - (islandInset * 2) - 4)
 
   readonly property int labelWidth: expanded ? 130 : 168
+
+  // Bar.qml's open-panel mark defaults to 55% of the slot, which on a wide pill
+  // paints a ~130px accent bar instead of a dot. Hint the extent it should use.
+  readonly property real openPanelIndicatorWidth: Style.space(18)
 
   // ---- playback position ----
   // Quickshell refreshes MprisPlayer.position only when positionChanged() is
@@ -195,10 +198,10 @@ Item {
   implicitHeight: bar ? bar.barSize : 26
 
   // ---- pill body interaction ----
-  // Declared BEFORE the pill so it sits underneath: the transport buttons and
-  // the scrub strip are later siblings and win the click. It stays the only
-  // hoverEnabled area, and the areas above it leave hover events alone, so
-  // `hovered` still tracks the whole widget.
+  // Declared BEFORE the pill so it sits underneath: the transport buttons are
+  // later siblings and win the click. It stays the only hoverEnabled area, and
+  // the areas above it leave hover events alone, so `hovered` still tracks the
+  // whole widget.
   MouseArea {
     anchors.fill: parent
     hoverEnabled: true
@@ -237,9 +240,7 @@ Item {
 
     Row {
       id: row
-      // Above the scrub strip below, so the bottom edge of a transport button
-      // is still a button and not a seek. The Row's own children are inert, so
-      // scrubbing under the label still reaches the strip.
+      // Above the progress hairline so the transport buttons stay on top of it.
       z: 1
       anchors.verticalCenter: parent.verticalCenter
       anchors.left: parent.left
@@ -395,8 +396,12 @@ Item {
     }
 
     // ---- progress hairline ----
-    // Sits on the pill's bottom edge; thickens on hover and becomes a scrub
-    // target. Inset horizontally so it stays inside the rounded corners.
+    // Purely visual: sits on the pill's bottom edge and thickens on hover.
+    // It is NOT a scrub target -- Bar.qml's per-slot `modulePointer` MouseArea
+    // is the last child of every ModuleSlot and only re-delivers *composed*
+    // events, so a press-drag here starts a bar reorder and never reaches the
+    // module. Seeking lives on the panel's PanelSlider instead.
+    // Inset horizontally so it stays inside the rounded corners.
     Item {
       id: track
       anchors.left: parent.left
@@ -425,21 +430,6 @@ Item {
         opacity: root.expanded ? 0.80 : 0.34
         Behavior on width { NumberAnimation { duration: 900; easing.type: Easing.Linear } }
         Behavior on opacity { NumberAnimation { duration: 160 } }
-      }
-    }
-
-    // Scrub strip: the bottom 9px of the pill, above the body click area so a
-    // seek never lands as an accidental play/pause.
-    MouseArea {
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.bottom: parent.bottom
-      height: 9
-      enabled: root.expanded && root.seekable
-      cursorShape: enabled ? Qt.SizeHorCursor : Qt.ArrowCursor
-      onPressed: function (mouse) { root.seekTo((mouse.x - 10) / Math.max(1, track.width)) }
-      onPositionChanged: function (mouse) {
-        if (pressed) root.seekTo((mouse.x - 10) / Math.max(1, track.width))
       }
     }
   }

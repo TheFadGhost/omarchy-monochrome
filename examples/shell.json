@@ -59,13 +59,13 @@
           "id": "omarchy.agents"
         },
         {
-          "id": "omarchy.bluetooth"
-        },
-        {
           "id": "omarchy.network"
         },
         {
           "id": "omarchy.audio"
+        },
+        {
+          "id": "omarchy.bluetooth"
         },
         {
           "id": "omarchy.monitor"

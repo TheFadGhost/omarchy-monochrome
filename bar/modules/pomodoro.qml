@@ -1,10 +1,14 @@
 import QtQuick
 import Quickshell
-import Quickshell.Io
-import Quickshell.Hyprland
+import qs.Ui
+import qs.Commons
 
 // Focus timer. Click to pick a duration and lock in.
 // Matches the sysmon pill so the two read as one system.
+//
+// Popup built on Omarchy's own PopupCard / PanelSectionHeader / PanelSeparator
+// / Button instead of hand-rolled chrome -- see mediapill.qml and the battery
+// panel (power/Panel.qml)'s power-profile row, which the duration pills copy.
 Item {
   id: root
 
@@ -18,18 +22,17 @@ Item {
   property bool menuOpen: false
   property int completed: 0
 
-  readonly property color fg: bar ? bar.foreground : "#dfe3e6"
+  readonly property color fg: bar ? bar.barForeground : "#dfe3e6"
   readonly property color bg: bar ? bar.background : "#0a0a0b"
   readonly property string mono: bar ? bar.fontFamily : "monospace"
-  readonly property var myWindow: root.QsWindow ? root.QsWindow.window : null
   readonly property real progress: sessionLength > 0 ? 1 - (remaining / sessionLength) : 0
 
   readonly property var choices: [
-    { label: "15 min", secs: 900 },
-    { label: "25 min", secs: 1500 },
-    { label: "45 min", secs: 2700 },
-    { label: "60 min", secs: 3600 },
-    { label: "90 min", secs: 5400 }
+    { label: "15m", secs: 900 },
+    { label: "25m", secs: 1500 },
+    { label: "45m", secs: 2700 },
+    { label: "60m", secs: 3600 },
+    { label: "90m", secs: 5400 }
   ]
 
   // Omarchy's bar README documents bar.shellQuote(), but Bar.qml does not
@@ -37,13 +40,18 @@ Item {
   // escaper instead.
   function sq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
   function alpha(a) { return Qt.rgba(fg.r, fg.g, fg.b, a) }
+  function close() { menuOpen = false }
 
   // Pill geometry must fit INSIDE the island plate, not the bar band.
   // The band is Style.bar.size-horizontal (44); ghost.barisland insets it by
   // 7px top and bottom, leaving ~30px of plate. Sizing off the band directly
   // makes the pill overflow the plate. Keep this in sync with Island.qml inset.
-  readonly property int islandInset: 7
+  readonly property int islandInset: Style.space(7)
   readonly property int pillH: Math.max(14, (bar ? bar.barSize : 26) - (islandInset * 2) - 4)
+
+  // Bar.qml's open-panel mark defaults to 55% of the slot, which on a wide pill
+  // paints a long accent bar instead of a dot. Hint the extent it should use.
+  readonly property real openPanelIndicatorWidth: Style.space(18)
 
   function pad(n) { return n < 10 ? "0" + n : "" + n }
   function clock(s) { return pad(Math.floor(s / 60)) + ":" + pad(s % 60) }
@@ -127,7 +135,7 @@ Item {
         color: root.fg
         opacity: root.running ? 1.0 : 0.55
         font.family: root.mono
-        font.pixelSize: 11
+        font.pixelSize: Style.font.bodySmall
         font.bold: root.running && root.remaining <= 60
         Behavior on opacity { NumberAnimation { duration: 200 } }
       }
@@ -140,7 +148,7 @@ Item {
         color: root.fg
         opacity: 0.40
         font.family: root.mono
-        font.pixelSize: 9
+        font.pixelSize: Style.font.caption
       }
     }
 
@@ -154,120 +162,87 @@ Item {
     }
   }
 
-  HyprlandFocusGrab {
-    active: root.menuOpen
-    windows: root.myWindow ? [pop, root.myWindow] : [pop]
-    onCleared: root.menuOpen = false
-  }
+  // =====================================================================
+  //  Control panel
+  //
+  //  Built on Omarchy's own PopupCard / PanelSectionHeader / PanelSeparator /
+  //  Button instead of hand-rolled chrome. That buys Color.popups.*,
+  //  Style.cornerRadius, the shared 140ms fade, focus-grab dismissal,
+  //  bar-position-aware anchoring and the popout coordinator for free -- and
+  //  means this panel re-themes with every other Omarchy popup rather than
+  //  drifting away from them.
+  // =====================================================================
 
-  PopupWindow {
+  PopupCard {
     id: pop
-    visible: root.menuOpen && root.myWindow !== null
-    color: "transparent"
-    implicitWidth: card.implicitWidth
-    implicitHeight: card.implicitHeight
+    anchorItem: root
+    bar: root.bar
+    owner: root
+    open: root.menuOpen
+    contentWidth: pop.fittedContentWidth(Style.space(230))
+    contentHeight: pop.fittedContentHeight(col.implicitHeight)
 
-    anchor {
-      window: root.myWindow
-      adjustment: PopupAdjustment.Slide
-      edges: Edges.Top | Edges.Left
-      gravity: Edges.Bottom | Edges.Right
-      rect.width: 1
-      rect.height: 1
-      onAnchoring: {
-        var p = root.mapToItem(null, 0, 0)
-        pop.anchor.rect.x = Math.round(p.x + root.width / 2 - pop.implicitWidth / 2)
-        pop.anchor.rect.y = Math.round(p.y + root.height + 6)
+    Column {
+      id: col
+      anchors.fill: parent
+      spacing: Style.space(14)
+
+      PanelSectionHeader {
+        text: root.running ? "IN SESSION" : "LOCK IN FOR"
+        foreground: root.fg
       }
-    }
 
-    Rectangle {
-      id: card
-      implicitWidth: 168
-      implicitHeight: col.implicitHeight + 20
-      color: root.bg
-      radius: 12
-      border.width: 1
-      border.color: root.alpha(0.18)
+      // ---- duration pills ----
+      // Mirrors the battery panel's power-profile row: one even-width Button
+      // per choice, bordered, with the running length highlighted as active.
+      Row {
+        id: choiceRow
+        width: parent.width
+        spacing: Style.space(6)
 
-      opacity: root.menuOpen ? 1 : 0
-      scale: root.menuOpen ? 1 : 0.95
-      Behavior on opacity { NumberAnimation { duration: 130; easing.type: Easing.OutCubic } }
-      Behavior on scale { NumberAnimation { duration: 170; easing.type: Easing.OutBack } }
-
-      Column {
-        id: col
-        anchors.centerIn: parent
-        width: parent.width - 18
-        spacing: 1
-
-        Text {
-          text: root.running ? "IN SESSION" : "LOCK IN FOR"
-          color: root.fg; opacity: 0.40
-          font.family: root.mono; font.pixelSize: 9; font.letterSpacing: 1.2
-          bottomPadding: 7
-          anchors.horizontalCenter: parent.horizontalCenter
-        }
+        readonly property real cellWidth: root.choices.length > 0
+          ? (width - spacing * (root.choices.length - 1)) / root.choices.length
+          : 0
 
         Repeater {
           model: root.choices
-          Rectangle {
+
+          Button {
             required property var modelData
-            width: col.width
-            height: 27
-            radius: 7
-            color: ma.containsMouse ? root.alpha(0.12) : "transparent"
-            Behavior on color { ColorAnimation { duration: 110 } }
-
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              anchors.left: parent.left
-              anchors.leftMargin: ma.containsMouse ? 14 : 11
-              text: parent.modelData.label
-              color: root.fg
-              opacity: ma.containsMouse ? 1.0 : 0.72
-              font.family: root.mono
-              font.pixelSize: 12
-              Behavior on anchors.leftMargin { NumberAnimation { duration: 110; easing.type: Easing.OutCubic } }
-              Behavior on opacity { NumberAnimation { duration: 110 } }
-            }
-            MouseArea {
-              id: ma
-              anchors.fill: parent
-              hoverEnabled: true
-              onClicked: root.start(parent.modelData.secs)
-            }
+            width: choiceRow.cellWidth
+            text: modelData.label
+            fontSize: Style.font.bodySmall
+            foreground: root.fg
+            horizontalPadding: Style.spacing.controlPaddingX
+            verticalPadding: Style.spacing.controlPaddingY
+            bordered: true
+            active: root.running && root.sessionLength === modelData.secs
+            onClicked: root.start(modelData.secs)
           }
         }
+      }
 
-        Rectangle {
-          visible: root.running
-          width: col.width
-          height: 27
-          radius: 7
-          color: sma.containsMouse ? root.alpha(0.12) : "transparent"
-          Behavior on color { ColorAnimation { duration: 110 } }
-          Text {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: 11
-            text: "stop"
-            color: root.fg
-            opacity: sma.containsMouse ? 1.0 : 0.45
-            font.family: root.mono
-            font.pixelSize: 12
-          }
-          MouseArea { id: sma; anchors.fill: parent; hoverEnabled: true; onClicked: root.stop() }
-        }
+      PanelSeparator { foreground: root.fg; visible: root.running }
 
-        Text {
-          visible: root.completed > 0
-          text: root.completed + " done today"
-          color: root.fg; opacity: 0.35
-          font.family: root.mono; font.pixelSize: 9
-          topPadding: 8
-          anchors.horizontalCenter: parent.horizontalCenter
-        }
+      Button {
+        width: parent.width
+        visible: root.running
+        leftAlign: true
+        text: "Stop"
+        fontSize: Style.font.bodySmall
+        foreground: root.fg
+        onClicked: root.stop()
+      }
+
+      Text {
+        width: parent.width
+        visible: root.completed > 0
+        text: root.completed + " done today"
+        color: root.fg
+        opacity: 0.45
+        font.family: root.mono
+        font.pixelSize: Style.font.caption
+        horizontalAlignment: Text.AlignHCenter
       }
     }
   }

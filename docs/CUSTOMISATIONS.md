@@ -90,9 +90,14 @@ including the two `o.window(...)` scroll overrides.
   overriding Omarchy's `"0.985 0.96"`
 - **Blur policy:** enabled globally *only* because layer blur requires it; every
   window is excluded via `o.window(".*", { no_blur = true })`, and
-  `hl.layer_rule` applies it to shell layers only (bar, menu, notifications,
-  osd, clipboard, emojis, reminders, polkit, keyboard-panel, image-selector,
-  network-qr).
+  `hl.layer_rule` applies it to shell layers only (bar, **ghost-bar-island**,
+  menu, notifications, osd, clipboard, emojis, reminders, polkit,
+  keyboard-panel, image-selector, network-qr).
+
+> `omarchy-bar` alone blurs nothing here: the bar surface is transparent
+> (`shell.json`), and the visible plate is the `ghost-bar-island` layer. Both
+> namespaces stay in the list — blurring the bar is harmless, blurring the
+> island is the one that shows.
 
 *Measured:* idle 19% GPU / 9.25 W with blur vs 19% / 9.26 W without (free);
 under load 23% vs 21% GPU — the delta is below the battery sensor's noise floor.
@@ -173,7 +178,7 @@ theme automatically.
 | `sysmon.qml` | right | CPU/GPU/RAM/temp + sparkline. Click = detail pop-out, right-click = btop. Backed by `~/.config/omarchy/bar/scripts/sysmon`. |
 | `pomodoro.qml` | center | Focus timer, click for 15/25/45/60/90. Right-click stops. |
 | `notes.qml` | right | Scratchpad, saves to `~/.local/state/omarchy/scratchpad.txt` 900ms after typing stops. |
-| `mediapill.qml` | left | Now-playing. Idle: animated equaliser glyph + elided label over a progress hairline. Hover: pill fills in, prev/play-pause/next slide out, elapsed readout appears, label marquees. Click: panel with desaturated artwork, drag-scrub timeline with hover time preview, shuffle/repeat, volume, source switcher. Middle = next, right = play/pause, scroll = prev/next, drag the pill's bottom 9px = seek. Replaces first-party `omarchy.media`. |
+| `mediapill.qml` | left | Now-playing. Idle: animated equaliser glyph + elided label over a progress hairline. Hover: pill fills in, prev/play-pause/next slide out, elapsed readout appears, label marquees. Click: panel with desaturated artwork, drag-scrub timeline with hover time preview, shuffle/repeat, volume, source switcher. Middle = next, right = play/pause, scroll = prev/next. **Scrubbing is panel-only** — the pill's progress hairline is purely visual (see the `modulePointer` gotcha below). Replaces first-party `omarchy.media`. |
 
 **Gotchas learned the hard way — keep these in mind when editing:**
 
@@ -201,15 +206,32 @@ theme automatically.
   Every module derives `pillH` from `bar.barSize - (islandInset*2) - 4`.
   Changing `[bar] size-horizontal` in `shell.toml` **or** `inset` in
   `Island.qml` means re-checking all four: sizing off the raw band overflows the
-  plate and hangs outside the bar.
+  plate and hangs outside the bar. Both the plate's `inset`/`sideInset` and the
+  modules' `islandInset` are `Style.space(...)`, so they shrink with the base
+  font in step with the pills — a raw number there collapses the plate faster
+  than its contents.
+- **Bar.qml's open-panel mark defaults to 55% of the slot width**, which on a
+  wide pill paints a ~130px accent bar where a dot belongs. Every module that
+  opens a panel declares `readonly property real openPanelIndicatorWidth:
+  Style.space(18)` (or `...Height` on a vertical bar) to override it.
 - Click-outside-to-dismiss needs `HyprlandFocusGrab` from `Quickshell.Hyprland`.
 - The `sysmon` script resolves the CPU temp sensor by **name** (`k10temp`), not
   by hwmon index — hwmon numbering isn't stable across reboots.
 - **Later siblings win both paint order and clicks.** A widget-wide catch-all
   `MouseArea` declared *after* the pill swallows every button inside it —
   declare it first and give the interactive row a `z`. `mediapill.qml` does
-  both; the `z` is what stops a transport button's bottom edge registering as a
-  seek (not belt-and-braces).
+  both; the `z` keeps the transport buttons painted and clickable above the
+  progress hairline.
+- **Bar.qml puts a reorder `MouseArea` (`modulePointer`) on top of EVERY bar
+  module.** It is the last child of each `ModuleSlot`, fills the slot, and
+  starts a bar-reorder drag past a 4px threshold. Its `propagateComposedEvents`
+  only re-delivers *composed* events (`clicked`, `doubleClicked`,
+  `pressAndHold`) — `pressed`, `positionChanged` and `released` never reach the
+  module. **A press-drag gesture inside a bar widget is therefore impossible**:
+  it reorders the widget instead. `mediapill` used to put a 9px scrub strip on
+  its bottom edge for this reason and it could never fire; that strip is gone
+  and seeking lives on the panel's `PanelSlider`. Anything drag-shaped belongs
+  in a popup, not in the pill.
 - **A `MouseArea` with `hoverEnabled: false` is transparent to hover but still
   eats clicks** — lets `mediapill`'s buttons sit atop its hover area without
   breaking the hovered state.
@@ -244,9 +266,14 @@ theme automatically.
   image or backdrop, set `maskEnabled: true` and point `maskSource` at a hidden
   `Rectangle` with `layer.enabled: true` and the matching radius. Both the
   panel's ambient backdrop and its cover thumbnail do this.
-- **`sysmon` and `pomodoro` hardcode their popup below the pill**, which lands
-  offscreen if the bar is dragged to the bottom edge. `mediapill` branches on
-  `bar.position` in `onAnchoring` instead. Copy that one, not theirs.
+- **A hand-placed popup lands offscreen when the bar is not on the top edge.**
+  `sysmon`, `pomodoro` and `mediapill` all use `PopupCard`, which anchors itself
+  for all four bar positions. `notes.qml` is the one exception — it must keep a
+  layer-shell `PanelWindow` to receive keystrokes — so it copies `PopupCard`'s
+  `onAnchoring` four-edge logic by hand into its card's `x`/`y`. Note that
+  `mapToItem()` is a *function call*: a QML binding wrapped around it captures
+  no dependencies and freezes at the first (pre-layout) answer, so `notes` keeps
+  the mapped origin in a plain property refreshed by a `relocate()` function.
 - **Hyprland 0.56 has no click dispatcher** — only `hl.dsp.cursor.move`. To
   screenshot a click-opened panel, temporarily default its `open` property to
   `true` *and* disable the `HyprlandFocusGrab` (an active grab clears the state
@@ -277,6 +304,11 @@ resolved against the engine, not against the importing file's directory — so i
 resolves from anywhere. Verified empirically, not just assumed: a probe module
 in `~/.config/omarchy/bar/modules/` printed real values
 (`caption=10 body=12 displayLarge=28 popupPadding=14 popupsBg=#101315`).
+
+> Those numbers are **theme- and font-dependent, not constants.** The colour in
+> particular was probed under a different theme: `Color.popups.background`
+> falls back to the theme `background`, which on Monochrome is `#0a0a0b`. Never
+> hardcode a probed value — read the token.
 
 Use these instead of rolling your own:
 
@@ -396,7 +428,22 @@ they just also show the stock toast.
   click-through. Keeping the window size constant means Hyprland never has to
   reposition it as the card grows and shrinks.
 - Fonts and colours are read at runtime from `omarchy-font-current` and the
-  *current* theme's `colors.toml`, so the shelf follows `omarchy theme set`.
+  *current* theme's `colors.toml` — which lives under `~/.local/state`, **not**
+  `~/.config`. The original code read the `~/.config` path, which does not
+  exist; `read_theme()` swallowed the `OSError` and fell back to a hardcoded
+  palette that happened to match, so the shelf looked right while following
+  nothing. It also built its `Gtk.CssProvider` once at startup. Both fixed: the
+  app now watches `~/.local/state/omarchy/current/theme/colors.toml` **and its
+  parent directory** and rebuilds the provider on change. The parent matters —
+  `omarchy-theme-set` does `rm -rf current/theme && mv next current/theme`, which
+  destroys the directory any monitor on the inner file was watching.
+
+**Supervision.** The shelf is started by `systemd --user` (`ghost-shotshelf.service`,
+`Restart=on-failure`), **not** by `o.launch_on_start`. It died once mid-session
+with no coredump, no journal entry and nothing to restart it — the first symptom
+was pressing PRINT and getting nothing. systemd also gives
+`journalctl --user -u ghost-shotshelf`, which is the answer to "how would I even
+find out". `autostart.lua` now just does `systemctl --user start`.
 
 **What cannot be scripted:** there is no way to synthesise a pointer button on
 this setup, so the drag gesture itself must be tested by hand. `wtype` exits 0
@@ -415,8 +462,14 @@ hyprctl eval 'local f=io.open("/tmp/d","w") local t={} for k in pairs(hl.dsp) do
 ```
 left    spacer · menu · workspaces · mediapill
 center  indicators · clock · pomodoro · keyboard-layout · weather · system-update
-right   sysmon · notes · tray · agents · bluetooth · network · audio · monitor · power · spacer
+right   sysmon · notes · [tray] · agents · network · audio · bluetooth · monitor · power · spacer
 ```
+
+> `omarchy.tray`'s position is **not** whatever `shell.json` says.
+> `Bar.qml:341-343` runs every section through `pinTrayToInner()`, which moves
+> the tray to the section's *inner* edge — the FRONT of the right section, the
+> END of left/center — so the drawer reveals away from the screen edge. Moving
+> the `omarchy.tray` entry in `shell.json` has no visible effect.
 
 Idle: `screensaver` 600s, `lock` 1800s.
 
@@ -471,7 +524,8 @@ Stock themes are untouched; `omarchy theme set "Matte Black"` restores the old l
 ~/.config/hypr/monitors.lua          scale 1
 ~/.config/hypr/looknfeel.lua         geometry, blur policy, 2 animation sets
 ~/.config/hypr/input.lua             kb_options, touchpad speed, gestures
-~/.config/hypr/bindings.lua          7 keybinds
+~/.config/hypr/hyprland.lua          + require("hypr.windows")
+~/.config/hypr/bindings.lua          8 keybinds
 ~/.config/hypr/autostart.lua         terminal on login
 ~/.config/omarchy/shell.json         bar layout, transparent, idle, plugins[]
 ~/.config/omarchy/shell.toml         [bar] size-horizontal = 44      (NEW)
@@ -482,7 +536,8 @@ Stock themes are untouched; `omarchy theme set "Matte Black"` restores the old l
 ~/.local/bin/{ghost-shotshelf,ghost-capture}                          (NEW)
 ~/.config/hypr/windows.lua           shelf window rules              (NEW)
 ~/.config/hypr/bindings.lua          PRINT rebound to ghost-capture
-~/.config/hypr/autostart.lua         ghost-shotshelf on login
+~/.config/hypr/autostart.lua         starts ghost-shotshelf.service
+~/.config/systemd/user/ghost-shotshelf.service                        (NEW)
 ~/.config/omarchy/bar/scripts/sysmon                                  (NEW)
 ~/.config/omarchy/plugins/ghost.barisland/                            (NEW)
 ~/.local/state/omarchy/powerprofiles/ac                               (NEW)
@@ -507,6 +562,8 @@ hyprctl reload
 cp ~/.config/omarchy/shell.json.bak.1787616894 ~/.config/omarchy/shell.json
 rm -f ~/.config/omarchy/shell.toml
 rm -rf ~/.config/omarchy/plugins/ghost.barisland ~/.config/omarchy/bar
+systemctl --user disable --now ghost-shotshelf.service
+rm -f ~/.config/systemd/user/ghost-shotshelf.service
 rm -rf ~/.local/share/ghost-shotshelf ~/.local/bin/ghost-shotshelf ~/.local/bin/ghost-capture
 rm -f ~/.config/hypr/windows.lua   # and drop require("hypr.windows") from hyprland.lua
 omarchy restart shell

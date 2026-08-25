@@ -17,8 +17,11 @@ import qs.Commons
 Item {
   id: root
 
-  readonly property int inset: 7          // vertical gap, band edge -> plate
-  readonly property int sideInset: 10     // horizontal gap, screen edge -> plate
+  // Font-scaled, like `band` below: a smaller base font must shrink the plate's
+  // insets in step with the pills it holds, or the plate collapses faster than
+  // they do. Keep `inset` in sync with the modules' `islandInset`.
+  readonly property int inset: Style.space(7)       // vertical gap, band edge -> plate
+  readonly property int sideInset: Style.space(10)  // horizontal gap, screen edge -> plate
   readonly property int band: Style.bar.sizeHorizontal
 
   Variants {

@@ -1,11 +1,19 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import Quickshell.Hyprland
+import qs.Ui
+import qs.Commons
 
 // Live CPU / GPU / RAM / temperature, with a CPU sparkline.
 // Draws its own rounded pill so it reads as a floating module on the
 // transparent bar. All colour comes from the bar, so it follows the theme.
+//
+// The detail pop-out is built on Omarchy's own PopupCard / PanelSectionHeader
+// / PanelSeparator instead of hand-rolled chrome -- see mediapill.qml for the
+// idiom this copies. That buys Color.popups.*, Style.cornerRadius, the
+// shared 140ms fade, focus-grab dismissal, bar-position-aware anchoring and
+// the popout coordinator for free, and means this panel re-themes with every
+// other Omarchy popup instead of drifting away from them.
 Item {
   id: root
 
@@ -26,19 +34,23 @@ Item {
   property bool menuOpen: false
 
   readonly property int histLen: 22
-  readonly property color fg: bar ? bar.foreground : "#dfe3e6"
+  readonly property color fg: bar ? bar.barForeground : "#dfe3e6"
   readonly property color bg: bar ? bar.background : "#0a0a0b"
   readonly property string mono: bar ? bar.fontFamily : "monospace"
-  readonly property var myWindow: root.QsWindow ? root.QsWindow.window : null
 
+  function close() { menuOpen = false }
   function alpha(a) { return Qt.rgba(fg.r, fg.g, fg.b, a) }
 
   // Pill geometry must fit INSIDE the island plate, not the bar band.
   // The band is Style.bar.size-horizontal (44); ghost.barisland insets it by
   // 7px top and bottom, leaving ~30px of plate. Sizing off the band directly
   // makes the pill overflow the plate. Keep this in sync with Island.qml inset.
-  readonly property int islandInset: 7
+  readonly property int islandInset: Style.space(7)
   readonly property int pillH: Math.max(14, (bar ? bar.barSize : 26) - (islandInset * 2) - 4)
+
+  // Bar.qml's open-panel mark defaults to 55% of the slot, which on a wide pill
+  // paints a long accent bar instead of a dot. Hint the extent it should use.
+  readonly property real openPanelIndicatorWidth: Style.space(18)
 
 
   implicitWidth: pill.implicitWidth
@@ -130,7 +142,7 @@ Item {
             color: root.fg
             opacity: 0.40
             font.family: root.mono
-            font.pixelSize: 9
+            font.pixelSize: Style.font.caption
             font.letterSpacing: 0.5
             anchors.verticalCenter: parent.verticalCenter
           }
@@ -139,7 +151,7 @@ Item {
             color: root.fg
             opacity: parent.modelData.v > 85 ? 1.0 : 0.88
             font.family: root.mono
-            font.pixelSize: 11
+            font.pixelSize: Style.font.bodySmall
             font.bold: parent.modelData.v > 85
             anchors.verticalCenter: parent.verticalCenter
             Behavior on opacity { NumberAnimation { duration: 250 } }
@@ -152,7 +164,7 @@ Item {
         color: root.fg
         opacity: root.temp > 80 ? 0.95 : 0.55
         font.family: root.mono
-        font.pixelSize: 10
+        font.pixelSize: Style.font.caption
         anchors.verticalCenter: parent.verticalCenter
         visible: root.temp > 0
       }
@@ -169,127 +181,186 @@ Item {
     }
   }
 
-  // ---- detail pop-out ----
-  HyprlandFocusGrab {
-    active: root.menuOpen
-    windows: root.myWindow ? [pop, root.myWindow] : [pop]
-    onCleared: root.menuOpen = false
-  }
+  // =====================================================================
+  //  Detail pop-out
+  //
+  //  Mirrors the battery popup's structure: a hero row (stacked labels,
+  //  big right-aligned number), a full-width usage bar, and a two-column
+  //  key/value grid for the remaining figures.
+  // =====================================================================
 
-  PopupWindow {
+  PopupCard {
     id: pop
-    visible: root.menuOpen && root.myWindow !== null
-    color: "transparent"
-    implicitWidth: card.implicitWidth
-    implicitHeight: card.implicitHeight
+    anchorItem: root
+    bar: root.bar
+    owner: root
+    open: root.menuOpen
+    contentWidth: pop.fittedContentWidth(Style.space(300))
+    contentHeight: pop.fittedContentHeight(col.implicitHeight)
 
-    anchor {
-      window: root.myWindow
-      adjustment: PopupAdjustment.Slide
-      edges: Edges.Top | Edges.Left
-      gravity: Edges.Bottom | Edges.Right
-      rect.width: 1
-      rect.height: 1
-      onAnchoring: {
-        var p = root.mapToItem(null, 0, 0)
-        pop.anchor.rect.x = Math.round(p.x + root.width / 2 - pop.implicitWidth / 2)
-        pop.anchor.rect.y = Math.round(p.y + root.height + 6)
-      }
-    }
+    Column {
+      id: col
+      anchors.fill: parent
+      spacing: Style.space(14)
 
-    Rectangle {
-      id: card
-      implicitWidth: 240
-      implicitHeight: col.implicitHeight + 22
-      color: root.bg
-      radius: 12
-      border.width: 1
-      border.color: root.alpha(0.18)
+      // ---------- Hero: stacked labels · big right-aligned CPU number ----------
+      Item {
+        width: parent.width
+        implicitHeight: Math.max(heroLabels.implicitHeight, heroPercent.implicitHeight)
 
-      opacity: root.menuOpen ? 1 : 0
-      scale: root.menuOpen ? 1 : 0.96
-      Behavior on opacity { NumberAnimation { duration: 130; easing.type: Easing.OutCubic } }
-      Behavior on scale { NumberAnimation { duration: 160; easing.type: Easing.OutBack } }
+        Column {
+          id: heroLabels
+          anchors.left: parent.left
+          anchors.right: heroPercent.left
+          anchors.rightMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(2)
 
-      Column {
-        id: col
-        anchors.centerIn: parent
-        width: parent.width - 24
-        spacing: 5
+          Text {
+            text: "CPU"
+            color: root.fg
+            font.family: root.mono
+            font.pixelSize: Style.font.title
+            font.bold: true
+            elide: Text.ElideRight
+            width: parent.width
+          }
 
-        Text {
-          text: "SYSTEM"
-          color: root.fg; opacity: 0.40
-          font.family: root.mono; font.pixelSize: 9; font.letterSpacing: 1.2
-          bottomPadding: 4
-        }
-
-        Repeater {
-          model: [
-            { k: "CPU",  v: root.cpu + "%   load " + root.load, p: root.cpu },
-            { k: "GPU",  v: root.gpu + "%", p: root.gpu },
-            { k: "RAM",  v: root.mem + "%   " + root.memUsed + " / " + root.memTotal + " GiB", p: root.mem },
-            { k: "Swap", v: root.swap + "%", p: root.swap },
-            { k: "Temp", v: root.temp + " °C", p: Math.min(100, root.temp) }
-          ]
-          Item {
-            required property var modelData
-            width: col.width
-            height: 26
-
-            Text {
-              anchors.left: parent.left
-              y: 0
-              text: parent.modelData.k
-              color: root.fg; opacity: 0.45
-              font.family: root.mono; font.pixelSize: 10
-            }
-            Text {
-              anchors.right: parent.right
-              y: 0
-              text: parent.modelData.v
-              color: root.fg; opacity: 0.9
-              font.family: root.mono; font.pixelSize: 10
-            }
-            // usage rule
-            Rectangle {
-              anchors.bottom: parent.bottom
-              anchors.bottomMargin: 5
-              width: parent.width
-              height: 2
-              radius: 1
-              color: root.alpha(0.08)
-              Rectangle {
-                width: parent.width * (Math.max(0, Math.min(100, parent.parent.modelData.p)) / 100)
-                height: parent.height
-                radius: 1
-                color: root.fg
-                opacity: 0.55
-                Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
-              }
-            }
+          Text {
+            text: ("load " + root.load).toUpperCase()
+            color: Qt.darker(root.fg, 1.4)
+            font.family: root.mono
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.2
+            elide: Text.ElideRight
+            width: parent.width
           }
         }
 
         Text {
-          text: "TOP BY MEMORY"
-          color: root.fg; opacity: 0.40
-          font.family: root.mono; font.pixelSize: 9; font.letterSpacing: 1.2
-          topPadding: 6; bottomPadding: 2
-        }
-        Text {
-          text: root.topProcs
-          color: root.fg; opacity: 0.7
-          font.family: root.mono; font.pixelSize: 10
-          lineHeight: 1.3
-        }
-        Text {
-          text: "click again to close  ·  right click: btop"
-          color: root.fg; opacity: 0.30
-          font.family: root.mono; font.pixelSize: 8
-          topPadding: 8
+          id: heroPercent
+          text: root.cpu + "%"
+          color: root.fg
+          font.family: root.mono
+          font.pixelSize: Style.font.displayLarge
+          font.bold: true
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
         }
       }
+
+      // ---------- CPU usage bar ----------
+      Item {
+        width: parent.width
+        implicitHeight: Style.space(8)
+
+        Rectangle {
+          id: cpuTrack
+          anchors.fill: parent
+          radius: height / 2
+          color: root.alpha(0.12)
+        }
+
+        Rectangle {
+          anchors.left: cpuTrack.left
+          anchors.verticalCenter: cpuTrack.verticalCenter
+          height: cpuTrack.height
+          radius: cpuTrack.radius
+          color: root.fg
+          width: Math.max(cpuTrack.height, cpuTrack.width * (root.cpu / 100))
+          Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+        }
+      }
+
+      // ---------- CPU sparkline ----------
+      Row {
+        id: sparkRow
+        width: parent.width
+        height: Style.space(24)
+        spacing: Style.space(2)
+
+        Repeater {
+          model: root.histLen
+          Rectangle {
+            required property int index
+            readonly property int val: index < root.cpuHistory.length ? root.cpuHistory[index] : 0
+            width: (sparkRow.width - (root.histLen - 1) * sparkRow.spacing) / root.histLen
+            radius: 1
+            height: Math.max(1, Math.round((val / 100) * sparkRow.height))
+            anchors.bottom: sparkRow.bottom
+            color: root.fg
+            opacity: 0.25 + (val / 100) * 0.55
+            Behavior on height { NumberAnimation { duration: 450; easing.type: Easing.OutCubic } }
+            Behavior on opacity { NumberAnimation { duration: 450 } }
+          }
+        }
+      }
+
+      PanelSeparator { foreground: root.fg }
+
+      // ---------- Two-column key/value grid ----------
+      Row {
+        width: parent.width
+        spacing: Style.space(20)
+
+        Column {
+          width: (parent.width - parent.spacing) / 2
+          spacing: Style.spacing.labelGap
+          InfoPair { label: "RAM"; value: root.mem + "%  " + root.memUsed + "/" + root.memTotal + " GiB" }
+          InfoPair { label: "GPU"; value: root.gpu + "%" }
+          InfoPair { label: "Load"; value: root.load }
+        }
+
+        Column {
+          width: (parent.width - parent.spacing) / 2
+          spacing: Style.spacing.labelGap
+          InfoPair { label: "Swap"; value: root.swap + "%" }
+          InfoPair { label: "Temp"; value: root.temp > 0 ? (root.temp + " °C") : "—" }
+        }
+      }
+
+      // ---------- Top processes ----------
+      PanelSeparator { foreground: root.fg }
+      PanelSectionHeader { text: "TOP BY MEMORY"; foreground: root.fg; fontFamily: root.mono }
+
+      Text {
+        width: parent.width
+        text: root.topProcs
+        color: root.fg
+        opacity: 0.7
+        font.family: root.mono
+        font.pixelSize: Style.font.bodySmall
+        lineHeight: 1.3
+        wrapMode: Text.NoWrap
+        // Long process names otherwise run out under the card border.
+        elide: Text.ElideRight
+      }
     }
+  }
+
+  component InfoPair: Row {
+    property string label: ""
+    property string value: ""
+
+    width: parent.width
+    spacing: Style.space(8)
+
+    InfoLabel { text: label }
+    Item { width: Math.max(0, parent.width - parent.children[0].implicitWidth - parent.children[2].implicitWidth - parent.spacing * 2); height: 1 }
+    InfoValue { text: value }
+  }
+
+  component InfoLabel: Text {
+    color: root.fg
+    opacity: 0.6
+    font.family: root.mono
+    font.pixelSize: Style.font.bodySmall
+  }
+
+  component InfoValue: Text {
+    color: root.fg
+    font.family: root.mono
+    font.pixelSize: Style.font.bodySmall
   }
 }
