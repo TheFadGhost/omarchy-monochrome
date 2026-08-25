@@ -6,8 +6,8 @@
 # the region picker it spawns inherits the same PATH. Everything else about the
 # capture (grim, slurp, the clipboard copy, the editor hint) is unchanged.
 #
-# ghost-shotshelf notices the new file by watching the screenshot directory, so
-# it does not depend on this wrapper -- captures started any other way still
-# reach the shelf, they just also show Omarchy's own toast.
-exec env PATH="$HOME/.local/share/ghost-shotshelf/shim:$PATH" \
+# Sill notices the new file by watching the screenshot directory, so it does
+# not depend on this wrapper -- captures started any other way still reach it,
+# they just also show Omarchy's own toast.
+exec env PATH="$HOME/.local/share/sill/shim:$PATH" \
   omarchy-capture-screenshot "$@"

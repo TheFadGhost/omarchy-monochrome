@@ -1,0 +1,81 @@
+# ghost desktop — one config for sill and the bar widgets.
+# Written by ghost-settings; hand-editing is fine — every running
+# component watches this file and applies changes on save.
+# Out-of-range values are clamped on load; unknown keys are kept
+# (verbatim, in the trailing block) but ignored.
+
+[general]
+follow_theme = true               # Recolour components when the Omarchy theme changes.
+animations = true                 # Master switch; any per-app "follow" resolves to this.
+
+[sill]
+position = "top-right"            # Where the chip and expanded panel anchor. · top-left|top|top-right|left|center|right|bottom-left|bottom|bottom-right
+margin = 60                       # Gap between the panel and the screen edge. · (0-128) px
+keybind_toggle = true             # SUPER+SHIFT+V toggles the panel (bound in bindings.lua).
+expand_on_hover = true            # Expand when the pointer rests on the bar's empty space
+expand_on_drag = true             # Expand when a drag hovers the chip (Phase 5).
+expand_on_click = true            # Expand when the chip is clicked.
+hover_delay_ms = 300              # Delay before a hover expands the panel. · (0-2000) ms
+collapse_s = 15                   # Seconds before an auto-expanded panel folds back into · (0-120) s · 0 = never
+max_items = 200                   # Clipboard entries shown (Phase 2). · (10-1000)
+max_age_days = 7                  # Drop clipboard entries older than this (Phase 2). · (0-90) days · 0 = keep forever
+disable_omarchy_clipboard = false # Unbind SUPER+CTRL+V only. The Quickshell plugin stays
+purge_on_lock = false             # Purge clipboard history when the session locks (Phase 2).
+
+[sill.screenshots]
+max_history = 10                  # Screenshots kept in the shelf strip. · (1-50)
+copy = true                       # Show the Copy path / Copy image buttons.
+edit = true                       # Show the Edit button (OMARCHY_SCREENSHOT_EDITOR).
+ocr = false                       # Reserved; not implemented in Phase 1.
+share = false                     # Reserved; not implemented in Phase 1.
+save_as = false                   # Reserved; not implemented in Phase 1.
+drag = true                       # Thumbnails and the chip are drag sources.
+trash = true                      # Right-click a fan thumbnail removes it from the shelf
+
+[sill.privacy]
+denylist = [
+  "org.keepassxc.KeePassXC",
+  "1Password",
+]
+
+[bar.drawer]
+enabled = true                    # Off = icons stay inline (Phase 6).
+wifi = true
+bluetooth = true
+audio = true
+display = true
+expand_on = "click"               # click|hover
+auto_close_s = 5                  # (0-30) s · 0 = stays open
+
+[bar.media]
+enabled = true
+max_title_chars = 32              # (10-80)
+scroll_title = "hover"            # off|hover|always
+show_progress = true
+controls_on_hover = true
+hide_after_pause_s = 60           # (0-600) s · 0 = never hide
+
+[bar.sysmon]
+enabled = true
+cpu = true
+mem = true
+temp = false
+net = false
+interval_s = 3                    # (1-30) s
+style = "bars"                    # bars|text
+cpu_warn_pct = 85                 # (50-100) %
+
+[bar.pomodoro]
+enabled = true
+work_min = 25                     # (5-120) min
+short_break_min = 5               # (1-30) min
+long_break_min = 15               # (5-60) min
+cycles = 4                        # (2-8)
+autostart = "breaks"              # off|breaks|all
+notify = true
+show_when_idle = false
+
+[bar.notes]
+enabled = true
+file = "~/.local/share/ghost/notes.md"
+show_count = true

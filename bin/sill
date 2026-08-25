@@ -1,0 +1,5 @@
+#!/bin/bash
+# Launcher for Sill. Single instance: GTK's application-id handling makes a
+# second invocation forward its command line (e.g. `sill toggle`) to the
+# running one. Subcommands: (none)=run · toggle · purge (P2) · doctor [--self-test]
+exec python3 "$HOME/.local/share/sill/main.py" "$@"

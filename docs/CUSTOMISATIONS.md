@@ -350,7 +350,18 @@ color: Qt.darker(foreground, 1.4)`. `mediapill.qml`'s panel copies exactly this.
 runs under the card border and is clipped. Truncate the string in JS before
 handing it to `text:` (see `mediapill.qml`'s `sourceLabel()`).
 
-### 6e. Screenshot shelf — `~/.local/share/ghost-shotshelf/`
+### 6e. Sill — screenshot + stash panel — `~/.local/share/sill/`
+
+**Supersedes `ghost-shotshelf`, which is retired and deleted.** Sill is the same
+GTK4 toplevel approach (the reasoning below still applies verbatim) with tabs,
+a Pinned stash, a drop target, and a TOML config at `~/.config/ghost/settings.toml`
+that live-reloads. Supervised by `sill.service` (`Restart=on-failure`).
+`ghost-capture` now shadows `omarchy-notification-send` from
+`~/.local/share/sill/shim/`. Health check: `sill doctor --self-test`, which
+re-verifies the drag providers actually put mime types on the wire.
+
+Migration done-condition met: no `shotshelf` references remain outside
+historical comments. Everything below describes the design Sill inherited.
 
 Replaces Omarchy's five-second screenshot toast with a shelf that persists
 until dismissed, collapses to a chip, fans out multiple shots, and — the whole
@@ -549,6 +560,71 @@ Stock themes are untouched; `omarchy theme set "Matte Black"` restores the old l
 
 ---
 
+## 8a. Luna — assistant daemon (Phase 0)
+
+A resident personal assistant. Code in `~/Work/luna`, state in
+`~/.local/share/luna`, design in `~/Work/luna/docs/ARCHITECTURE.md`.
+Phase 0 is text only: no voice, no workspace dispatch, no bar widget.
+
+- `lunad` runs as a systemd **user** unit, `PartOf=graphical-session.target`,
+  set up the same way as `voxtype.service`. ~12 MB resident.
+- IPC is one Unix socket, `$XDG_RUNTIME_DIR/luna/luna.sock`, mode 0600,
+  newline-delimited JSON. Client is `~/Work/luna/bin/luna`.
+- Python 3 stdlib only, no dependencies, no packages installed.
+
+Gotchas found building it:
+
+- **`claude -p` inherits `~/.claude/CLAUDE.md`.** Without `--safe-mode` every
+  Luna turn loads the global memory file — ~22k extra cached tokens and, worse,
+  a competing set of standing instructions fighting the persona spec. Symptom:
+  Luna answering like a coding agent and talking about subagents. `--safe-mode`
+  also drops skills, plugins, hooks and MCP, which is what we want here.
+- **Do not invoke `~/.local/bin/claude`** from a daemon: that shim runs
+  `mise use -g claude`, mutating the global mise config on every call. Call
+  `~/.local/share/mise/installs/claude/latest/claude` directly.
+- **`logging` refuses `extra={"message": ...}`** — any key shadowing a
+  LogRecord attribute raises `KeyError: Attempt to overwrite 'message'`.
+  Structured payloads built from exceptions hit this constantly.
+  `lunad/log.py:safe_extra()` prefixes the colliding keys.
+- **`sqlite3.version` was removed in Python 3.14.** Use `sqlite3.sqlite_version`.
+- Arch's Python does ship FTS5; `lunad` still probes for it at start and
+  refuses to run without it, because tier-2 recall has no useful fallback.
+- The agent subprocess gets `start_new_session=True` and is cancelled with
+  `killpg` on **its own** group only. This is the session firewall in its
+  smallest form: Luna signals what she spawned and nothing else.
+
+Deliberately NOT done in Phase 0: `codex` adapter (flags unverified — it is a
+stub that refuses loudly), tier-3 `profile.json`, semantic recall, TTS,
+voxtype routing. `~/.config/voxtype/config.toml` was not touched.
+
+---
+
+### 8a.1 Luna voice (Phase 1 groundwork, 2026-08-25)
+
+- **Piper TTS installed into a project venv, NOT system-wide.** `~/Work/luna/.venv`
+  (198 MB) via `pip install piper-tts`. Reason: `sudo` requires a password on this
+  machine, so an unattended AUR build is impossible. Revert with `rm -rf ~/Work/luna/.venv`.
+- **Voice**: `en_GB-jenny_dioco-medium` in `~/.local/share/luna/voices/`
+  (61 MB `.onnx` + 4.8 KB `.onnx.json`). Fallback choice: `en_GB-alba-medium`.
+- **Measured on this hardware**: cold model load 1.12 s; warm synth 0.41 s for
+  6.75 s of audio; **RTF 0.061 (16.4x real time)**; **peak RSS 331 MB**.
+- **GOTCHA - the 331 MB.** The ARCHITECTURE.md budget originally said ~60 MB for
+  the TTS process; that was wrong by 5x. It is python + onnxruntime, not the
+  model file. Consequence: piper must NOT be held resident on a 7 GB machine.
+  It lazy-loads and unloads after 5 min idle; cold start is only 1.12 s so the
+  cost is one extra second on the first sentence after a lull.
+- **GOTCHA - upstream moved.** `rhasspy/piper` went read-only Oct 2025; live repo
+  is `OHF-Voice/piper1-gpl` (GPL-3.0). AUR `piper-tts-bin` still tracks the DEAD
+  repo - do not use it. `piper-tts-git` is the correct AUR package if ever
+  installing system-wide. Also `pacman -Ss piper` matches an unrelated GTK mouse
+  tool; ignore it.
+- **GOTCHA - `/usr/bin/time` does not exist here** (bash builtin `time` only).
+  Benchmark from inside python with `resource.getrusage`.
+- Model and its `.onnx.json` must share a basename and directory or piper fails
+  silently / sounds wrong.
+- Licence: piper is GPL-3.0 but is invoked as a separate binary over a pipe, so
+  it does not affect Luna's MIT licence.
+
 ## 9. Full inventory of changed/created files
 
 ```
@@ -563,16 +639,20 @@ Stock themes are untouched; `omarchy theme set "Matte Black"` restores the old l
 ~/.config/omarchy/themes/monochrome/                                  (NEW)
 ~/.config/omarchy/bar/modules/{sysmon,pomodoro,notes}.qml             (NEW)
 ~/.config/omarchy/bar/modules/mediapill.qml   replaces omarchy.media  (NEW)
-~/.local/share/ghost-shotshelf/       GTK4 screenshot shelf app       (NEW)
-~/.local/bin/{ghost-shotshelf,ghost-capture}                          (NEW)
+~/.local/share/sill/                  Sill: screenshots + pinned stash (NEW)
+~/.local/bin/{sill,ghost-capture}                                     (NEW)
+~/.config/ghost/settings.toml        Sill config, live-reloaded      (NEW)
 ~/.config/hypr/windows.lua           shelf window rules              (NEW)
 ~/.config/hypr/bindings.lua          PRINT rebound to ghost-capture
 ~/.config/hypr/autostart.lua         starts ghost-shotshelf.service
-~/.config/systemd/user/ghost-shotshelf.service                        (NEW)
+~/.config/systemd/user/sill.service                                   (NEW)
 ~/.config/omarchy/bar/scripts/sysmon                                  (NEW)
 ~/.config/omarchy/plugins/ghost.barisland/                            (NEW)
 ~/.local/state/omarchy/powerprofiles/ac                               (NEW)
 /boot/limine.conf                    timeout 5 -> 2
+~/Work/luna/                          Luna: lunad package, bin/luna, tests (NEW)
+~/.local/share/luna/                  Luna state: memory/, luna.log          (NEW)
+~/.config/systemd/user/lunad.service                                        (NEW)
 ```
 
 Nothing under `/usr/share/omarchy/` was modified, no Hyprland plugin installed,
@@ -593,9 +673,9 @@ hyprctl reload
 cp ~/.config/omarchy/shell.json.bak.1787616894 ~/.config/omarchy/shell.json
 rm -f ~/.config/omarchy/shell.toml
 rm -rf ~/.config/omarchy/plugins/ghost.barisland ~/.config/omarchy/bar
-systemctl --user disable --now ghost-shotshelf.service
-rm -f ~/.config/systemd/user/ghost-shotshelf.service
-rm -rf ~/.local/share/ghost-shotshelf ~/.local/bin/ghost-shotshelf ~/.local/bin/ghost-capture
+systemctl --user disable --now sill.service
+rm -f ~/.config/systemd/user/sill.service
+rm -rf ~/.local/share/sill ~/.local/bin/sill ~/.local/bin/ghost-capture ~/.config/ghost
 rm -f ~/.config/hypr/windows.lua   # and drop require("hypr.windows") from hyprland.lua
 omarchy restart shell
 
@@ -608,6 +688,11 @@ rm -f ~/.local/state/omarchy/powerprofiles/ac
 powerprofilesctl configure-action --disable amdgpu_panel_power
 sudo cp /boot/limine.conf.bak.pretune /boot/limine.conf
 sudo systemctl enable --now cups.service cups.socket avahi-daemon.service
+
+# Luna (Phase 0)
+systemctl --user disable --now lunad.service
+rm -f ~/.config/systemd/user/lunad.service && systemctl --user daemon-reload
+rm -rf ~/.local/share/luna          # memory + log; ~/Work/luna is the source, keep it
 
 # Nuclear
 omarchy refresh hyprland && omarchy refresh shell

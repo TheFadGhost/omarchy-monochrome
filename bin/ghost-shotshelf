@@ -1,4 +1,0 @@
-#!/bin/bash
-# Launcher for the screenshot shelf. Single instance: GTK's application-id
-# handling makes a second invocation activate the running one instead.
-exec python3 "$HOME/.local/share/ghost-shotshelf/shotshelf.py" "$@"
