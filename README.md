@@ -157,5 +157,10 @@ if you are writing your own widgets).
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE). The wallpaper in `themes/monochrome/backgrounds/`
-came with Omarchy and keeps whatever licence it had there.
+MIT — see [LICENSE](LICENSE), which covers the code in this repo only.
+
+The wallpaper in `themes/monochrome/backgrounds/` is **not mine and not MIT**.
+`0-dot-hands.jpg` is dot-matrix artwork by [@samdape](https://x.com/samdape) —
+his handle is watermarked into the bottom-right of the image. It ships with
+Omarchy in the `vantablack` theme (and as `2-dot-hands.jpg` in `matte-black`),
+and it keeps whatever terms it carries there. If you fork this, keep the credit.
