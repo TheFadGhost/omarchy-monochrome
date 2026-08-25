@@ -660,7 +660,10 @@ rules, now applied in all three tabs:
    it drops the controllers and breaks any remaining cycle deterministically
    (that is what `run_dispose` is for in language bindings).
 Verified: 30 forced store reloads, RSS flat (was +70 MB), object-count delta
-zero. Watch `systemctl --user status sill` — the "Memory:" line creeping is
+zero. Long-run confirmation: after 12 h of live uptime `systemctl --user
+status sill` reported Memory 45.2 M (peak 46.7 M) — flat, so the fix holds
+outside the forced-reload harness too.
+Watch `systemctl --user status sill` — the "Memory:" line creeping is
 the symptom.
 
 
