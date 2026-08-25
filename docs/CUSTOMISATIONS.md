@@ -445,6 +445,37 @@ was pressing PRINT and getting nothing. systemd also gives
 `journalctl --user -u ghost-shotshelf`, which is the answer to "how would I even
 find out". `autostart.lua` now just does `systemctl --user start`.
 
+**The three drag-out providers, measured on this machine.** Each content type
+needs a different provider, and two of the three have a silent-failure mode
+where the drag advertises ZERO mime types and every drop does nothing:
+
+```
+new_for_value("hello")                 -> ['text/plain;charset=utf-8','text/plain']  OK
+new_for_value(texture)                 -> []                          <-- TRAP
+new_for_value(GObject.Value(Gdk.Texture, tex)) -> 16 image mimes       OK
+new_for_value(Gdk.FileList([gfile]))   -> uri-list + portal filetransfer  OK
+union(file + Value(Texture) + str)     -> 21 mimes   <-- "target chooses"
+```
+
+Same root cause both times: PyGObject types the GValue with the *concrete*
+class (`GLocalFile`, `GdkMemoryTexture`) while GDK registers its serialisers
+against the *abstract* type (`GFile`, `GdkTexture`), so nothing matches. Plain
+strings work naively because `gchararray` is already final. Always verify with
+`provider.ref_formats().union_serialize_mime_types().get_mime_types()`.
+
+**Receiving is the mirror image and reads as broken when it is fine.** A
+correctly configured `Gtk.DropTarget` reports an EMPTY
+`get_formats().get_mime_types()`; check `get_gtypes()` instead. Construct it as
+`Gtk.DropTarget.new(GObject.TYPE_NONE, Gdk.DragAction.COPY)` — PyGObject
+rejects the documented `G_TYPE_INVALID` idiom with `ValueError`.
+
+**Staying awake.** `omarchy-toggle-idle stay-awake` touches
+`~/.local/state/omarchy/indicators/stay-awake`; the shell watches that file and
+logs `idle-cycle-cancel: stay-awake`. Note the CLI prints the state of *idle*,
+so `disabled` means stay-awake is ON, and `--status` reports
+`{"enabled":true}` with a tooltip describing what a click would do NEXT, not
+the current state. Both readings invert easily.
+
 **What cannot be scripted:** there is no way to synthesise a pointer button on
 this setup, so the drag gesture itself must be tested by hand. `wtype` exits 0
 and delivers nothing; Hyprland 0.56 exposes `hl.dsp.send_key_state`
