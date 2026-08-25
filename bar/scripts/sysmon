@@ -1,0 +1,42 @@
+#!/bin/bash
+# Emits system stats as JSON for the bar's sysmon widget.
+# Resolves the CPU temp sensor by name rather than hard-coding a hwmon index,
+# because hwmon numbering is not stable across boots.
+
+cpu_temp_file=""
+for h in /sys/class/hwmon/hwmon*; do
+  [[ $(cat "$h/name" 2>/dev/null) == "k10temp" ]] && { cpu_temp_file="$h/temp1_input"; break; }
+done
+
+read_cpu() { awk '/^cpu /{idle=$5+$6; total=0; for(i=2;i<=NF;i++) total+=$i; print idle, total}' /proc/stat; }
+
+read -r i1 t1 < <(read_cpu)
+sleep 0.25
+read -r i2 t2 < <(read_cpu)
+
+cpu=$(awk -v i1="$i1" -v t1="$t1" -v i2="$i2" -v t2="$t2" \
+  'BEGIN{dt=t2-t1; di=i2-i1; if(dt<=0) print 0; else printf "%d", (1-di/dt)*100}')
+
+read -r mem_pct mem_used mem_total < <(awk '
+  /^MemTotal:/     {t=$2}
+  /^MemAvailable:/ {a=$2}
+  END{ printf "%d %.1f %.1f", (t-a)/t*100, (t-a)/1048576, t/1048576 }' /proc/meminfo)
+
+swap=$(awk '/^SwapTotal:/{t=$2}/^SwapFree:/{f=$2}END{if(t<=0)print 0; else printf "%d",(t-f)/t*100}' /proc/meminfo)
+
+temp=0
+[[ -r $cpu_temp_file ]] && temp=$(( $(cat "$cpu_temp_file") / 1000 ))
+
+load=$(awk '{print $1}' /proc/loadavg)
+
+# GPU busy %. Glob rather than hard-code the card index -- it is not stable.
+gpu=0
+for g in /sys/class/drm/card*/device/gpu_busy_percent; do
+  [[ -r $g ]] && { gpu=$(cat "$g"); break; }
+done
+
+top=$(ps -eo comm,%mem --sort=-%mem --no-headers 2>/dev/null | head -3 \
+  | awk '{printf "%s %s%%\\n", $1, $2}' | tr -d '\n' | sed 's/\\n$//')
+
+printf '{"cpu":%d,"gpu":%d,"mem":%d,"memUsed":"%s","memTotal":"%s","swap":%d,"temp":%d,"load":"%s","top":"%s"}\n' \
+  "$cpu" "$gpu" "$mem_pct" "$mem_used" "$mem_total" "$swap" "$temp" "$load" "$top"

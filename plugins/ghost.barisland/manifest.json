@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "ghost.barisland",
+  "name": "Bar Island",
+  "version": "1.0.0",
+  "author": "ghost",
+  "description": "Rounded floating backing plate rendered behind the bar",
+  "kinds": ["service"],
+  "entryPoints": { "service": "Island.qml" }
+}

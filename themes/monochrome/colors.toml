@@ -1,0 +1,38 @@
+# monochrome - total greyscale, cool-tinted.
+# Base: near-black #0a0a0b (not pure #000, to keep depth on an IPS panel).
+# Foreground: cool ash #dfe3e6 (not pure #fff, easier on the eyes).
+# Every ANSI colour slot is a grey. There is no colour anywhere in this theme.
+
+mode = "dark"
+
+accent = "#8f979c"
+selection = "#1f2326"
+muted = "#6b7276"
+
+background = "#0a0a0b"
+dark_background = "#070708"
+darker_background = "#050506"
+lighter_background = "#16181a"
+
+foreground = "#dfe3e6"
+dark_foreground = "#565c60"
+light_foreground = "#c3c9cd"
+bright_foreground = "#eef2f4"
+
+hyprland_active_border = "rgba(dfe3e6cc) rgba(6b7276cc) 45deg"
+
+red = "#9aa1a6"
+yellow = "#c3c9cd"
+orange = "#aeb5ba"
+green = "#b3babe"
+cyan = "#c9cfd3"
+blue = "#8f979c"
+magenta = "#a4abb0"
+brown = "#4d5357"
+
+bright_red = "#b8bfc4"
+bright_yellow = "#dfe3e6"
+bright_green = "#ccd2d6"
+bright_cyan = "#e4e8ea"
+bright_blue = "#aab1b6"
+bright_magenta = "#c0c6cb"

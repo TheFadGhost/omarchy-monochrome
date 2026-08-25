@@ -1,0 +1,98 @@
+{
+  "bar": {
+    "centerAnchor": "omarchy.clock",
+    "id": "omarchy.bar",
+    "layout": {
+      "center": [
+        {
+          "id": "omarchy.indicators"
+        },
+        {
+          "format": "dddd HH:mm",
+          "formatAlt": "d MMMM 'W'ww yyyy",
+          "id": "omarchy.clock",
+          "verticalFormat": "HH\n\u2014\nmm"
+        },
+        {
+          "id": "omarchy.keyboard-layout"
+        },
+        {
+          "id": "pomodoro",
+          "type": "qml"
+        },
+        {
+          "id": "omarchy.weather"
+        },
+        {
+          "id": "omarchy.system-update"
+        }
+      ],
+      "left": [
+        {
+          "id": "omarchy.spacer",
+          "size": 14
+        },
+        {
+          "id": "omarchy.menu"
+        },
+        {
+          "id": "omarchy.workspaces"
+        },
+        {
+          "id": "mediapill",
+          "type": "qml"
+        }
+      ],
+      "right": [
+        {
+          "id": "sysmon",
+          "type": "qml"
+        },
+        {
+          "id": "notes",
+          "type": "qml"
+        },
+        {
+          "id": "omarchy.tray"
+        },
+        {
+          "id": "omarchy.agents"
+        },
+        {
+          "id": "omarchy.bluetooth"
+        },
+        {
+          "id": "omarchy.network"
+        },
+        {
+          "id": "omarchy.audio"
+        },
+        {
+          "id": "omarchy.monitor"
+        },
+        {
+          "id": "omarchy.power"
+        },
+        {
+          "id": "omarchy.spacer",
+          "size": 14
+        }
+      ]
+    },
+    "position": "top",
+    "transparent": true
+  },
+  "idle": {
+    "lock": 1800,
+    "screensaver": 600
+  },
+  "plugins": [
+    {
+      "id": "ghost.barisland"
+    },
+    {
+      "id": "ghost.shotshelf"
+    }
+  ],
+  "version": 1
+}

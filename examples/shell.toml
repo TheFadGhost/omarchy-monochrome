@@ -1,0 +1,3 @@
+# User shell style overrides. Loaded after the theme's shell.toml.
+[bar]
+size-horizontal = 44
