@@ -121,15 +121,16 @@ class ScreenshotsTab:
             # cross-C ref cycle (leak; see clipboard_tab.render()).
             paintable = Gtk.WidgetPaintable.new(s.get_widget())
             s.set_icon(paintable, 32, 24)
-            self.app.cancel_collapse()
+            self.app.drag_began()
 
-        # drag-begin cancels the collapse timer; re-arm on both outcomes or
-        # the panel stays expanded forever after one drag.
+        # drag-begin freezes the collapse timer and blocks hover-expand
+        # (via the app's drag counter); re-arm on both outcomes or the
+        # panel stays expanded forever after one drag.
         def end(_s, _drag, _delete):
-            self.app.schedule_collapse()
+            self.app.drag_ended()
 
         def cancelled(_s, _drag, _reason):
-            self.app.schedule_collapse()
+            self.app.drag_ended()
             return False  # let GTK run its drag-cancel animation
 
         src.connect("prepare", prepare)

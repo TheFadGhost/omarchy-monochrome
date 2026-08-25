@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "ghost.barhover",
+  "name": "Bar Hover for Sill",
+  "version": "1.0.0",
+  "author": "ghost",
+  "description": "Reports pointer-resting-on-empty-bar-space to Sill for hover-to-expand",
+  "kinds": ["service"],
+  "entryPoints": { "service": "Hover.qml" }
+}

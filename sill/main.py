@@ -18,6 +18,7 @@ never has to reposition it as the panel expands and collapses — only the
 input region changes.
 """
 
+import json
 import os
 import sys
 import time
@@ -98,6 +99,11 @@ class Sill(Adw.Application):
         self._collapse_id = 0
         self._region_id = 0
         self._hovering = False
+        self._hover_id = 0        # pending hover-expand delay timer
+        self._hover_debounce = 0
+        self._bar_zone_in = None  # last bar-hover eligibility (None = unknown)
+        self._drag_count = 0      # in-flight Sill drags (blocks hover-expand)
+        self._hover_monitor = None
         self._last_tab = "screenshots"
         self.settings = None
         self.themer = None
@@ -171,6 +177,7 @@ class Sill(Adw.Application):
         GLib.timeout_add(150, self._sync_region_once)
 
         self._wire_settings()
+        self._watch_bar_hover()
         self.update_chip()
 
     def _write_pidfile(self):
@@ -186,7 +193,9 @@ class Sill(Adw.Application):
     def _wire_settings(self):
         s = self.settings
         s.on("sill.margin", lambda *_: self.apply_position())
-        s.on("sill.position", lambda *_: self.apply_position())
+        s.on("sill.position",
+             lambda *_: (self.apply_position(), self._hover_reeval()))
+        s.on("sill.expand_on_hover", lambda *_: self._hover_reeval())
         s.on("sill.collapse_s", lambda v: self.schedule_collapse())
         s.on("sill.screenshots.max_history", self.shots_tab.trim_history)
         s.on("general.animations", self._set_animations)
@@ -506,6 +515,114 @@ class Sill(Adw.Application):
         self._hovering = False
         if self.expanded:
             self.schedule_collapse()
+
+
+    # ---------------- hover-to-expand (Phase 5) ----------------
+    # The ghost.barhover Quickshell service plugin samples the pointer only
+    # while it is over the bar (gated on the bar's own HoverHandler state,
+    # so zero wakeups at idle) and writes pointer-rest-zone transitions to
+    # a tmpfs state file. Sill watches that file and applies the policy:
+    # sill.expand_on_hover, sill.hover_delay_ms, position adjacency, and
+    # the in-flight-drag guard. File-watch IPC on purpose -- it is STATE,
+    # not an event stream: either side can restart in any order and the
+    # truth is still on disk; inotify delivery (~1ms) is far below the
+    # hover delay it gates. See plugins/ghost.barhover/Hover.qml for why a
+    # hover surface over the bar is impossible (it would swallow the bar's
+    # own move-bar drag and double-click gestures at the Wayland level).
+    HOVER_STATE = os.path.join(
+        os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "ghost",
+        "sill-hover.state")
+
+    def _watch_bar_hover(self):
+        gfile = Gio.File.new_for_path(self.HOVER_STATE)
+        # Monitoring a not-yet-existing file is fine; CREATED fires later.
+        # WATCH_MOVES because the plugin writes atomically (temp + rename).
+        self._hover_monitor = gfile.monitor_file(
+            Gio.FileMonitorFlags.WATCH_MOVES, None)
+        self._hover_monitor.connect("changed", self._on_hover_file)
+        GLib.idle_add(self._read_hover_state)   # adopt current state
+
+    def _on_hover_file(self, *_a):
+        if self._hover_debounce:
+            GLib.source_remove(self._hover_debounce)
+        self._hover_debounce = GLib.timeout_add(30, self._read_hover_state)
+
+    def _read_hover_state(self):
+        self._hover_debounce = 0
+        try:
+            with open(self.HOVER_STATE) as fh:
+                data = json.loads(fh.read() or "{}")
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        in_zone = self._hover_zone_ok(data)
+        if in_zone == self._bar_zone_in:
+            return False
+        self._bar_zone_in = in_zone
+        self._cancel_hover_expand()
+        if in_zone and self.settings.get("sill.expand_on_hover", True) \
+                and not self.expanded and not self._drag_count:
+            delay = max(0, min(2000, int(
+                self.settings.get("sill.hover_delay_ms", 300))))
+            self._hover_id = GLib.timeout_add(delay, self._hover_expand_now)
+        return False
+
+    def _hover_zone_ok(self, data):
+        """Is the reported pointer-rest zone adjacent to the chip? The chip
+        is on the bar only when its row matches the bar's edge; middle-row
+        and opposite-edge positions never hover-expand (documented in
+        CUSTOMISATIONS.md rather than inventing behaviour for them)."""
+        zone = data.get("zone")
+        if zone not in ("left-gap", "right-gap"):
+            return False
+        pos = str(self.settings.get("sill.position", "top-right"))
+        row = ("top" if pos.startswith("top")
+               else "bottom" if pos.startswith("bottom") else "middle")
+        if row == "middle" or data.get("bar") != row:
+            return False
+        if pos.endswith("left"):
+            return zone == "left-gap"
+        if pos.endswith("right"):
+            return zone == "right-gap"
+        return True   # centred chip ("top"/"bottom"): either flanking gap
+
+    def _cancel_hover_expand(self):
+        if self._hover_id:
+            GLib.source_remove(self._hover_id)
+            self._hover_id = 0
+
+    def _hover_expand_now(self):
+        self._hover_id = 0
+        if self.settings.get("sill.expand_on_hover", True) \
+                and not self.expanded and not self._drag_count:
+            self._pick_context_tab()
+            # auto=True: sill.collapse_s folds it back like any other
+            # auto-expansion; the GTK enter/leave handlers keep it open
+            # while the pointer is actually inside the panel.
+            self.set_expanded(True, auto=True)
+        return False
+
+    def _hover_reeval(self):
+        """Settings changed under a possibly-armed hover state."""
+        self._cancel_hover_expand()
+        self._bar_zone_in = None    # force re-evaluation on next read
+        GLib.idle_add(self._read_hover_state)
+
+    # ---------------- drag bookkeeping ----------------
+    # Tabs report their GTK drag lifecycles here. While any Sill drag is in
+    # flight, auto-collapse is frozen (as before) and hover-expand is
+    # blocked: expanding would re-cut the window's input region mid-drag,
+    # which the input-region policy forbids (see sync_input_region).
+    def drag_began(self):
+        self._drag_count += 1
+        self._cancel_hover_expand()
+        self.cancel_collapse()
+
+    def drag_ended(self):
+        # drag-cancel and drag-end can both fire for one drag; clamp.
+        self._drag_count = max(0, self._drag_count - 1)
+        self.schedule_collapse()
 
     # ---------------- tab callbacks ----------------
     def on_screenshot_arrived(self):

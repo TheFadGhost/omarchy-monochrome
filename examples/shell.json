@@ -93,6 +93,9 @@
   "plugins": [
     {
       "id": "ghost.barisland"
+    },
+    {
+      "id": "ghost.barhover"
     }
   ],
   "version": 1

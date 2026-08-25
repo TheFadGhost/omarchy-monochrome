@@ -104,12 +104,12 @@ class PinnedTab:
             # must never reference the widget it is attached to (leak; see
             # clipboard_tab.render()).
             s.set_icon(Gtk.WidgetPaintable.new(s.get_widget()), 24, 12)
-            self.app.cancel_collapse()
+            self.app.drag_began()
 
         src.connect("prepare", prepare)
         src.connect("drag-begin", begin)
-        src.connect("drag-end", lambda *_: self.app.schedule_collapse())
-        src.connect("drag-cancel", lambda *_: (self.app.schedule_collapse(),
+        src.connect("drag-end", lambda *_: self.app.drag_ended())
+        src.connect("drag-cancel", lambda *_: (self.app.drag_ended(),
                                                False)[1])
         widget.add_controller(src)
 

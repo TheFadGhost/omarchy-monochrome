@@ -663,6 +663,75 @@ Verified: 30 forced store reloads, RSS flat (was +70 MB), object-count delta
 zero. Watch `systemctl --user status sill` — the "Memory:" line creeping is
 the symptom.
 
+
+#### Phase 5 — hover-to-expand (2026-08-25)
+
+`sill.expand_on_hover`: the panel expands when the pointer **rests** on the
+bar's empty space beside the chip, `sill.hover_delay_ms` (default 300 ms)
+later. It is an *auto* expansion: `sill.collapse_s` folds it back, moving
+into the panel holds it open (existing GTK enter/leave), and it never fires
+while a Sill drag is in flight.
+
+Detection is the **`ghost.barhover`** service plugin (the sill-plan and the
+settings schema doc-string call it `ghost.sillhover` — same thing, renamed)
+plus a watched state file. Dead ends first, so nobody re-derives them:
+
+- **An overlay surface with `MouseArea { acceptedButtons: Qt.NoButton }`
+  swallows clicks.** Wayland input regions are per-SURFACE; `Qt.NoButton`
+  only re-routes clicks within one scene. And `Bar.qml`'s
+  `CenterGestureArea` — a MouseArea filling the ENTIRE bar background —
+  owns left-press-drag = move-bar-to-another-edge and double-click =
+  transparency toggle on exactly the empty space such a strip would cover.
+  The plan's R8 check ("bar icons still take clicks") would have *passed*
+  while both background gestures silently died inside the strip.
+- Enlarging Sill's own input region: dead — the layer-`top` bar stacks
+  above every xdg_toplevel and gets the pointer first.
+- Hyprland socket2: carries no pointer-motion event (sampled live).
+- Polling `hyprctl cursorpos`: ~7 ms per fork vs 0.04 ms on the raw
+  socket (~170x); kept out entirely, not even as a fallback.
+
+What ships takes **no input at all**. The shell host injects `shell` into
+service plugins; `shell.bar.barHovered` is the bar's own HoverHandler
+state — an event, not a poll. Only while it is true (and the bar's own
+reorder/move drags are not in flight — `barDragSource`/`barMoveActive`)
+the plugin samples `/cursorpos` on Hyprland's request socket every 100 ms
+and classifies the point against the bar's *live layout*: ModuleList /
+ModuleSlot items carry `region` ("left"/"center"/"right"), so the real
+gaps between sections are computed per screen, tracking layout changes
+automatically. Zero wakeups while the pointer is anywhere but the bar;
+zero clicks touched, ever; bar gestures untouched by construction.
+
+Zone transitions land in `$XDG_RUNTIME_DIR/ghost/sill-hover.state` (tmpfs,
+atomic writes) as one JSON line `{"zone":"right-gap|left-gap|none",
+"bar":<bar edge>,"monitor":...}`; Sill watches it with `Gio.FileMonitor`
+(WATCH_MOVES, to see the renames) and applies all policy on its side:
+`expand_on_hover`, `hover_delay_ms`, position adjacency, the drag guard.
+**File-watch, not a unix socket, on purpose**: the file is *state*, not an
+event stream — either side can restart in any order and the truth is still
+on disk; inotify delivery (~1 ms) is noise against a >=100 ms hover delay.
+
+**Where it applies.** `sill.position`'s row must match the bar's edge:
+`top-right` arms the right gap (between the center and right sections),
+`top-left` the left gap, `top` either flank; `bottom-*` mirror on a
+bottom bar. Middle-row positions (`left`/`center`/`right`) never
+hover-expand — the chip is not on the bar, and no behaviour was invented
+for them. Vertical bars: not supported. Only bar-at-top with `top-*` is
+exercised on this machine.
+
+Sill-side drag bookkeeping: tabs now call `app.drag_began()` /
+`app.drag_ended()` around GTK drags (instead of raw
+`cancel_collapse`/`schedule_collapse`) so a hover-expand can never re-cut
+the window's input region mid-drag.
+
+Verified end-to-end with `hl.dsp.cursor.move` sweeps (the §6b technique;
+no input synthesis): gaps classify at their true pixel ranges, right-gap
+rest expands after the delay, `collapse_s` folds it back, left-gap does
+NOT expand a top-right chip. **Fragility:** the plugin reads the bar scene
+read-only (`Variants.instances`, items with `region`); an omarchy update
+renaming those internals makes every lookup fail *soft* — hover-expand
+silently stops while click/keybind expansion keep working. After a major
+update, hover the gap left of `sysmon` and watch the state file.
+
 ### 6c. Bar layout
 
 ```
@@ -902,6 +971,7 @@ continuity, not for the money.
 ~/.config/systemd/user/sill.service                                   (NEW)
 ~/.config/omarchy/bar/scripts/sysmon                                  (NEW)
 ~/.config/omarchy/plugins/ghost.barisland/                            (NEW)
+~/.config/omarchy/plugins/ghost.barhover/     hover-to-expand for Sill (NEW)
 ~/.local/state/omarchy/powerprofiles/ac                               (NEW)
 /boot/limine.conf                    timeout 5 -> 2
 ~/Work/luna/                          Luna: lunad package, bin/luna, tests (NEW)
