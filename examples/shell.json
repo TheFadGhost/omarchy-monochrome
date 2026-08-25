@@ -59,6 +59,10 @@
           "id": "omarchy.agents"
         },
         {
+          "id": "drawer",
+          "type": "qml"
+        },
+        {
           "id": "omarchy.network"
         },
         {

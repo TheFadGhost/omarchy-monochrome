@@ -192,6 +192,7 @@ theme automatically.
 | `pomodoro.qml` | center | Focus timer, click for 15/25/45/60/90. Right-click stops. |
 | `notes.qml` | right | Scratchpad, saves to `~/.local/state/omarchy/scratchpad.txt` 900ms after typing stops. |
 | `mediapill.qml` | left | Now-playing. Idle: animated equaliser glyph + elided label over a progress hairline. Hover: pill fills in, prev/play-pause/next slide out, elapsed readout appears, label marquees. Click: panel with desaturated artwork, drag-scrub timeline with hover time preview, shuffle/repeat, volume, source switcher. Middle = next, right = play/pause, scroll = prev/next. **Scrubbing is panel-only** — the pill's progress hairline is purely visual (see the `modulePointer` gotcha below). Replaces first-party `omarchy.media`. |
+| `drawer.qml` | right | Icon drawer: collapses the wifi / sound / bluetooth / display bar icons into one chevron pill that fans the four icons out on hover and re-collapses on leave (eased 220ms width clips, mediapill idiom). Does **not** reimplement the panels: the four first-party widgets (`omarchy.network`, `omarchy.audio`, `omarchy.bluetooth`, `omarchy.monitor`) STAY in `shell.json` — the drawer finds their live instances via `bar.moduleSlots` and collapses their bar buttons to invisible 1px slivers with restorable `Binding`s (implicitWidth/Height 1, opacity 0, enabled false); its own cells mirror their live state (`item.icon`, `outputIcon()`, `outputMuted`, `connectedDevices`) and a click calls the live widget's `toggle()`, opening the REAL first-party panel, which anchors correctly because the 1px slot keeps its layout position beside the drawer. Non-default states stay fanned out while collapsed: muted output, disconnected network, bluetooth connected or radio off, and any cell whose panel is open. Right-click mirrors the stock icons (audio mute toggle, bluetooth radio toggle); scroll = volume on the audio cell, brightness on the display cell. Config per shell.json entry settings: `components` (widget id list) and `hover` (false = expand only on chevron click); a `ghost-settings` hook (`externalConfig`) is stubbed but unwired — the CLI did not exist at build time. If the module dies, the Bindings die with it and the stock icons return. |
 
 **Gotchas learned the hard way — keep these in mind when editing:**
 
@@ -298,6 +299,41 @@ theme automatically.
 - A *"File name case mismatch"* warning for these modules is **benign**.
 - `xkbcomp: Key <LFSH> added to map for multiple modifiers` is **benign** and
   pre-existing — it comes from Omarchy's own `shift:both_capslock_cancel`.
+
+- **Row/Column positioners skip zero-size items.** Hiding a first-party widget
+  with `visible: false` collapses its ModuleSlot to 0x0 (`implicitWidth` is
+  gated on `activeItem.visible`), and the positioner then never places the
+  slot — it strands at the section origin (measured x=1395 via `omarchy-shell
+  shell debugBarGeometry`), and the widget's panel, which anchors to its bar
+  button, opens centered there instead of under the drawer. `drawer.qml`
+  therefore collapses the buttons to a **1px transparent disabled sliver**
+  (Bindings: implicitWidth/Height 1, opacity 0, enabled false), which keeps the
+  slot positioned beside the drawer so summoned panels drop in the right place.
+  Item `opacity`/`enabled` do not propagate into the panels — they are
+  separate popup surfaces, not visual children.
+- **`Instantiator` resolved every delegate's context `modelData` to the FIRST
+  model entry** when fed a JS array of QObjects — only one of the drawer's four
+  hide-Bindings took effect, silently. A `Repeater` with
+  `required property var modelData` injects per-delegate correctly; the
+  wrapper Items are zero-size, invisible hosts for the Bindings.
+- **Summoning first-party panels — what exists (reusable knowledge):**
+  `shell.summon(id)` / `toggle(id)` (also via IPC: `omarchy-shell shell
+  toggle omarchy.bluetooth`) routes bar-widget panels through
+  `bar.summonBarWidget(id)`, which needs a **live slot in the bar layout**
+  whose activeItem has `open()`/`close()`/`opened` — remove the widget from
+  `shell.json` and summoning fails with "no live bar widget". Each panel also
+  answers its own IPC target directly: `omarchy-shell omarchy.bluetooth
+  toggle` (plus `toggleBluetooth` on that one). In-process, a custom module
+  can simply call the live item's `toggle()` — that is what `drawer.qml`
+  does. This is why the drawer keeps the four widgets registered instead of
+  replacing their entries.
+- **`Binding { restoreMode: Binding.RestoreBindingOrValue }` on another
+  widget's property is a safe, reversible override** — the target's own
+  binding (e.g. bluetooth's `visible: adapter !== null`) comes back when the
+  Binding is destroyed, so a failed/removed drawer degrades to stock icons.
+- **A cell that must stay visible while its panel is open needs its own open
+  mark**: Bar.qml's accent `openPanelIndicator` draws on the (now 1px) hidden
+  slot, so `drawer.qml` paints its own dot under the open cell.
 
 **Known limitation:** the Pomodoro session tally is in memory and resets when
 the shell restarts.
@@ -851,6 +887,7 @@ continuity, not for the money.
 ~/.config/omarchy/themes/monochrome/                                  (NEW)
 ~/.config/omarchy/bar/modules/{sysmon,pomodoro,notes}.qml             (NEW)
 ~/.config/omarchy/bar/modules/mediapill.qml   replaces omarchy.media  (NEW)
+~/.config/omarchy/bar/modules/drawer.qml      icon drawer (wifi/sound/bt/display) (NEW)
 ~/.local/share/sill/                  Sill: clipboard + screenshots + pins (NEW)
 ~/.local/share/sill/seen.json         text first-seen sidecar (TTL)   (NEW)
 ~/.local/bin/{sill,ghost-capture}                                     (NEW)
