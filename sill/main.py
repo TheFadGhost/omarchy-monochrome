@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config as sill_config  # noqa: E402
 import theme as sill_theme  # noqa: E402
+from clipboard_tab import ClipboardTab  # noqa: E402
 from pinned_tab import PinnedTab  # noqa: E402
 from screenshots_tab import ScreenshotsTab, pin_size, thumb  # noqa: E402
 
@@ -149,6 +150,7 @@ class Sill(Adw.Application):
 
         self.shots_tab = ScreenshotsTab(self)
         self.pinned_tab = PinnedTab(self)
+        self.clip_tab = ClipboardTab(self)
 
         self.panel = self._build_panel()
         self.chip = self._build_chip()
@@ -188,8 +190,117 @@ class Sill(Adw.Application):
         s.on("sill.collapse_s", lambda v: self.schedule_collapse())
         s.on("sill.screenshots.max_history", self.shots_tab.trim_history)
         s.on("general.animations", self._set_animations)
+        s.on("sill.max_items", lambda *_: self.clip_tab.render())
+        s.on("sill.max_age_days", lambda *_: self.clip_tab.daily_prune())
+        s.on("sill.privacy.denylist", self.clip_tab.set_denylist)
+        s.on("sill.keybind_toggle", lambda *_: self._sync_flags())
+        s.on("sill.disable_omarchy_clipboard", lambda *_: self._sync_flags())
         s.on_any(lambda keys: self._rerender())
         s.watch()
+        self._sync_flags()
+        self._watch_lock()
+        # TTL + orphan prune: once at startup (inside ClipboardTab.__init__)
+        # and then daily (plan §4).
+        GLib.timeout_add_seconds(24 * 3600, self._daily_prune)
+
+    def _daily_prune(self):
+        self.clip_tab.daily_prune()
+        return True
+
+    # ---------------- flag files (read by ~/.config/hypr/bindings.lua) ----
+    # A Hyprland bind cannot read the TOML, so boolean bind-affecting
+    # settings are mirrored as flag files (existence = the non-default
+    # state) and bindings.lua checks them at config parse:
+    #   disable-omarchy-clipboard -> hl.unbind("SUPER + CTRL + V") ONLY.
+    #       The Quickshell clipboard plugin stays loaded — it owns the
+    #       wl-paste watchers Sill's own tab depends on.
+    #   sill-no-toggle-bind       -> SUPER+SHIFT+V not bound.
+    FLAG_DIR = os.path.expanduser("~/.config/ghost/flags")
+
+    def _sync_flags(self):
+        changed = False
+        for name, want in (
+            ("disable-omarchy-clipboard",
+             bool(self.settings.get("sill.disable_omarchy_clipboard", False))),
+            ("sill-no-toggle-bind",
+             not self.settings.get("sill.keybind_toggle", True)),
+        ):
+            path = os.path.join(self.FLAG_DIR, name)
+            have = os.path.exists(path)
+            if want and not have:
+                os.makedirs(self.FLAG_DIR, mode=0o700, exist_ok=True)
+                with open(path, "w") as f:
+                    f.write("flag file read by ~/.config/hypr/bindings.lua;"
+                            " written by Sill from settings.toml\n")
+                changed = True
+            elif have and not want:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                changed = True
+        if changed:
+            _spawn(["hyprctl", "reload"])   # binds re-evaluate the flags
+
+    # ---------------- purge on lock (logind LockedHint) ----------------
+    def _watch_lock(self):
+        """Subscribe to this session's Lock signal / LockedHint property.
+        Only acts when `sill.purge_on_lock` is true AT LOCK TIME, so the
+        subscription is armed unconditionally and cheap."""
+        try:
+            mgr = Gio.DBusProxy.new_for_bus_sync(
+                Gio.BusType.SYSTEM, Gio.DBusProxyFlags.NONE, None,
+                "org.freedesktop.login1", "/org/freedesktop/login1",
+                "org.freedesktop.login1.Manager", None)
+            try:
+                path = mgr.call_sync(
+                    "GetSessionByPID", GLib.Variant("(u)", (os.getpid(),)),
+                    Gio.DBusCallFlags.NONE, 2000, None).unpack()[0]
+            except GLib.Error:
+                # sill.service runs in the systemd user manager, which is
+                # OUTSIDE any logind session — GetSessionByPID fails with
+                # NoSessionForPID. Fall back to the seated session of our
+                # uid (the graphical one; SSH sessions have no seat).
+                path = None
+                uid = os.getuid()
+                sessions = mgr.call_sync("ListSessions", None,
+                                         Gio.DBusCallFlags.NONE,
+                                         2000, None).unpack()[0]
+                for _sid, s_uid, _user, seat, s_path in sessions:
+                    if s_uid == uid and seat:
+                        path = s_path
+                        break
+                if path is None:
+                    raise GLib.Error.new_literal(
+                        Gio.io_error_quark(), "no seated session found", 0)
+            self._session_proxy = Gio.DBusProxy.new_for_bus_sync(
+                Gio.BusType.SYSTEM, Gio.DBusProxyFlags.NONE, None,
+                "org.freedesktop.login1", path,
+                "org.freedesktop.login1.Session", None)
+            self._session_proxy.connect("g-signal", self._on_session_signal)
+            self._session_proxy.connect("g-properties-changed",
+                                        self._on_session_props)
+        except GLib.Error as e:
+            print(f"sill: purge-on-lock unavailable: {e}", file=sys.stderr)
+
+    def _on_session_signal(self, _p, _sender, signal, _params):
+        if signal == "Lock":
+            self._maybe_purge_on_lock()
+
+    def _on_session_props(self, _p, changed, _inv):
+        if changed.unpack().get("LockedHint") is True:
+            self._maybe_purge_on_lock()
+
+    def _maybe_purge_on_lock(self):
+        if not self.settings.get("sill.purge_on_lock", False):
+            return
+        import store_clipboard
+        store_clipboard.purge()
+        print("sill: purged clipboard history on session lock",
+              file=sys.stderr)
+        self.clip_tab.store.load(initial=True)
+        self.clip_tab.render()
+        self.update_chip()
 
     def _set_animations(self, v):
         self.themer.animations = bool(v)
@@ -235,19 +346,7 @@ class Sill(Adw.Application):
         bar.append(close)
         panel.append(bar)
 
-        clip_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        h = Gtk.Label(label="CLIPBOARD", xalign=0)
-        h.add_css_class("heading")
-        clip_page.append(h)
-        stub = Gtk.Label(
-            label="Clipboard history lands in Phase 2.\n"
-                  "Until then SUPER+CTRL+V opens Omarchy's own manager.")
-        stub.add_css_class("hint")
-        stub.set_margin_top(18)
-        stub.set_margin_bottom(18)
-        clip_page.append(stub)
-
-        self.stack.add_named(clip_page, "clipboard")
+        self.stack.add_named(self.clip_tab.widget, "clipboard")
         self.stack.add_named(self.shots_tab.widget, "screenshots")
         self.stack.add_named(self.pinned_tab.widget, "pinned")
         panel.append(self.stack)
@@ -519,8 +618,15 @@ def doctor(self_test=False):
     watchers = os.popen("pgrep -af 'wl-paste.*--watch' 2>/dev/null").read().strip()
     n = len([l for l in watchers.splitlines() if "capture.sh" in l])
     print(f"  clipboard watchers  {n} (want 2)")
-    store = os.path.expanduser("~/.local/state/omarchy/clipboard-history.json")
-    print(f"  clipboard store     {'present' if os.path.exists(store) else 'MISSING'}")
+    import store_clipboard
+    cs = store_clipboard.ClipStore()
+    cs.load(initial=True)
+    print(f"  clipboard store     {cs.state} "
+          f"({cs.recognised_count}/{cs.raw_count} entries recognised)")
+    flags = os.path.expanduser("~/.config/ghost/flags")
+    for fname in ("disable-omarchy-clipboard", "sill-no-toggle-bind"):
+        if os.path.exists(os.path.join(flags, fname)):
+            print(f"  flag                {fname}")
     cfg = os.path.expanduser("~/.config/ghost/settings.toml")
     print(f"  settings.toml       {'present' if os.path.exists(cfg) else 'absent (defaults)'}")
     rc = 0
@@ -552,9 +658,13 @@ def main():
     if argv and argv[0] == "doctor":
         sys.exit(doctor(self_test="--self-test" in argv))
     if argv and argv[0] == "purge":
-        print("sill purge ships with the Clipboard tab (Phase 2).",
-              file=sys.stderr)
-        sys.exit(2)
+        # GTK-free and instance-free on purpose: works from a keybind, a
+        # lock hook or a dead session alike. A running Sill notices via its
+        # file monitor and re-renders.
+        import store_clipboard
+        store_clipboard.purge()
+        print("sill: clipboard history purged (pins untouched)")
+        sys.exit(0)
     app = Sill()
     sys.exit(app.run(sys.argv))
 

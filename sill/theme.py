@@ -146,6 +146,14 @@ def css_for(c, animations=True):
         padding: 14px;
     }}
     .dropzone.armed {{ border-color: alpha({fg}, 0.70); color: alpha({fg}, 0.85); }}
+    .banner {{
+        border: 1px solid alpha({fg}, 0.35);
+        border-radius: 8px;
+        color: alpha({fg}, 0.80);
+        font-size: 10px;
+        padding: 6px 8px;
+    }}
+    .urldomain {{ font-weight: bold; }}
     entry.rename {{
         background: alpha({fg}, 0.07);
         color: {fg};

@@ -112,8 +112,10 @@ Window blur was skipped anyway: it's nearly invisible over a monochrome palette.
 
 ## 5. Keybindings — `~/.config/hypr/bindings.lua`
 
-All were verified free before binding, so there are **no `hl.unbind` calls** —
-if a future Omarchy claims one of these, add an unbind first.
+All were verified free before binding (`hyprctl binds -j`). The `hl.unbind`
+calls that DO exist: `PRINT` (Omarchy binds it too; both would fire), and a
+conditional `SUPER + CTRL + V` (only when the `disable-omarchy-clipboard`
+flag file exists — see below).
 
 | Key | Action |
 |---|---|
@@ -124,6 +126,17 @@ if a future Omarchy claims one of these, add an unbind first.
 | `SUPER + ALT + C` | cmatrix |
 | `SUPER + ALT + P` | pipes.sh |
 | `SUPER + ALT + T` | tty-clock |
+| `SUPER + SHIFT + V` | Sill panel toggle (skipped if `sill.keybind_toggle=false`) |
+| `SUPER + SHIFT + Delete` | `sill purge` — wipe clipboard history |
+
+**Flag files** (`~/.config/ghost/flags/`): a Hyprland bind cannot read
+`settings.toml`, so Sill mirrors bind-affecting booleans as flag files
+(existence = non-default) and runs `hyprctl reload` when they change;
+`bindings.lua` checks them with `io.open` at config parse (verified: `io` IS
+available in the Lua sandbox). `disable-omarchy-clipboard` unbinds
+`SUPER+CTRL+V` **only** — the Quickshell clipboard plugin must stay loaded,
+it owns the `wl-paste` capture watchers Sill's Clipboard tab depends on.
+`sill-no-toggle-bind` suppresses the `SUPER+SHIFT+V` bind.
 
 Autostart (`autostart.lua`): one terminal on login, kept minimal — 8 GB RAM is
 the binding constraint here.
@@ -350,7 +363,7 @@ color: Qt.darker(foreground, 1.4)`. `mediapill.qml`'s panel copies exactly this.
 runs under the card border and is clipped. Truncate the string in JS before
 handing it to `text:` (see `mediapill.qml`'s `sourceLabel()`).
 
-### 6e. Sill — screenshot + stash panel — `~/.local/share/sill/`
+### 6e. Sill — clipboard + screenshot + stash panel — `~/.local/share/sill/`
 
 **Supersedes `ghost-shotshelf`, which is retired and deleted.** Sill is the same
 GTK4 toplevel approach (the reasoning below still applies verbatim) with tabs,
@@ -513,6 +526,90 @@ GTK button that logs its clicks. `hl.dsp.cursor` has only `move` and
 hyprctl eval 'local f=io.open("/tmp/d","w") local t={} for k in pairs(hl.dsp) do t[#t+1]=tostring(k) end table.sort(t) f:write(table.concat(t,"\n")) f:close() return "x"'
 ```
 
+**Nor can a modifier chord be synthesised.** `wtype -M logo -M shift -k v`
+does NOT trigger the compositor bind — virtual-keyboard modifiers don't merge
+with the injected key at the seat (the same reason Omarchy's own
+`clipboard.lua` uses `hl.dsp.send_key_state` instead of wtype for its
+universal shortcuts, and that dispatcher sends to the focused *surface*, not
+to the compositor's bind table). The bare key leaks into whatever window has
+focus instead. Keybind-fires-action must be verified by a human; verify the
+bind is *registered* with `hyprctl binds -j`.
+
+#### Phase 2 — the Clipboard tab (2026-08-25)
+
+Sill's Clipboard tab is a **read-only renderer of Omarchy's clipboard store**
+(`~/.local/state/omarchy/clipboard-history.json` + content-hashed images in
+`clipboard-images/`). Sill never runs its own `wl-paste --watch`: the
+Quickshell clipboard plugin owns both watchers and resurrects them; a second
+reader races for the same selection and doubles the secret-snapshot surface.
+
+Facts about that store that will bite anyone touching this code:
+
+- **`capturedAt` is a DISPLAY STRING** ("Tuesday 03:45"), not a timestamp,
+  and text entries carry no time at all. Real times: image file mtimes +
+  `~/.local/share/sill/seen.json` (content-key hash → first-seen epoch,
+  pruned with the store). Without this, TTL maths would be fiction.
+- It is **private, undocumented state with no stability contract**, so
+  `store_clipboard.py` ports `ClipboardHistory.js::normalizeEntry` tolerantly
+  and runs a schema guard: file missing / unreadable (retry once at 250 ms
+  for torn mid-write reads, then keep the in-memory last-good) / parses-but-
+  recognises-nothing ("drift") each show a one-line banner in the tab. A
+  silently empty panel is the failure mode this exists to avoid. The
+  last-good snapshot is never persisted — that would duplicate secrets past
+  a purge. `sill doctor` prints state + raw/recognised counts.
+- Omarchy's own UI reorders on copy: clicking a Sill row copies, the watcher
+  re-captures it, and `addEntry` dedupes it to the top. Normal, not a bug.
+
+Row rendering is type-aware but strictly offline: a hex colour becomes a
+swatch (the one sanctioned colour exception — the colour IS the content), a
+single-line URL renders domain-bold/path-dim, images render pre-scaled
+thumbnails. **Nothing is ever fetched from the network.** Click = copy +
+close; drag out = the union provider (target chooses among ~21 mimes); `+`
+pins the content into Sill's own store (pins survive eviction, TTL and
+purges by copying content into `blobs/`).
+
+Privacy (the honest version — limits documented, not hidden):
+
+- **Reactive denylist** (`[sill.privacy] denylist`): each entry is a
+  case-insensitive regex full-matched against the focused window class when
+  a NEW entry lands (~300 ms after capture). Match → the entry is deleted
+  from the store and never rendered, logged to the journal. Limits: if focus
+  moved within that window the check misses; the secret existed on disk
+  briefly and in the Wayland selection regardless; a re-copy of content
+  already in the store (dedupe) is not re-checked. True exclusion needs the
+  capture side, which is pacman-owned and not forked. Default denylist:
+  password managers + terminals (Alacritty/kitty/foot/ghostty/wezterm/
+  org.omarchy.terminal/TUI.*). **`org.omarchy.agent` (Claude windows) is
+  deliberately NOT denied** — agent output is the main thing copied on this
+  machine; add it to the list if that changes. Apps setting
+  `CLIPBOARD_STATE=sensitive` / `x-kde-passwordManagerHint` are already
+  excluded upstream by `capture.sh` and never reach the store.
+- **`sill purge`** (also `SUPER+SHIFT+Delete`): atomically writes `[]`,
+  empties `clipboard-images/`, clears the sidecar. GTK-free and
+  instance-free, so it works from a keybind or a dead session; a running
+  Sill notices via its file monitor. Pins untouched by design.
+- **`purge_on_lock`** (default off): logind session `Lock` signal /
+  `LockedHint` property via the system bus. `GetSessionByPID` fails for a
+  user-manager service (NoSessionForPID), so the proxy falls back to the
+  seated session of our uid via `ListSessions`. Off by default because the
+  screensaver locks at 10 min idle and purging every lock would gut the
+  feature.
+- **Perms re-asserted every reload**: store 600, images dir 700 (Omarchy
+  recreates at 644).
+- **TTL + orphan prune** (startup + daily): entries older than
+  `sill.max_age_days` dropped from the store; image files referenced by no
+  entry AND older than max(24 h grace, TTL — 7-day fallback when TTL=0,
+  since an orphan is unreachable by any consumer) deleted. Omarchy never
+  prunes `clipboard-images/` itself — orphans otherwise accumulate forever.
+  All store writes are read-modify-`os.replace`; the ms-scale race with the
+  Quickshell writer can lose at most one concurrent capture — accepted and
+  documented in exchange for not forking the pacman-owned pipeline.
+
+`sill.max_items` / `sill.max_age_days` also act as a display filter, applied
+live. Tests: `python3 ~/.local/share/sill/test_store_clipboard.py` (41
+asserts over the normaliser, schema guard, prune, purge, denylist matcher;
+uses env-seam temp dirs, never the real store).
+
 ### 6c. Bar layout
 
 ```
@@ -653,12 +750,16 @@ voxtype routing. `~/.config/voxtype/config.toml` was not touched.
 ~/.config/omarchy/themes/monochrome/                                  (NEW)
 ~/.config/omarchy/bar/modules/{sysmon,pomodoro,notes}.qml             (NEW)
 ~/.config/omarchy/bar/modules/mediapill.qml   replaces omarchy.media  (NEW)
-~/.local/share/sill/                  Sill: screenshots + pinned stash (NEW)
+~/.local/share/sill/                  Sill: clipboard + screenshots + pins (NEW)
+~/.local/share/sill/seen.json         text first-seen sidecar (TTL)   (NEW)
 ~/.local/bin/{sill,ghost-capture}                                     (NEW)
 ~/.config/ghost/settings.toml        Sill config, live-reloaded      (NEW)
+~/.config/ghost/flags/               bind flag files, written by Sill (NEW)
 ~/.config/hypr/windows.lua           Sill behaviour rules            (NEW)
 ~/.config/hypr/sill-position.lua     generated by Sill on position change (NEW)
-~/.config/hypr/bindings.lua          PRINT rebound to ghost-capture
+~/.config/hypr/bindings.lua          PRINT rebound; SUPER+SHIFT+V Sill;
+                                     SUPER+SHIFT+Delete purge; flag-gated
+                                     SUPER+CTRL+V unbind
 ~/.config/hypr/autostart.lua         starts ghost-shotshelf.service
 ~/.config/systemd/user/sill.service                                   (NEW)
 ~/.config/omarchy/bar/scripts/sysmon                                  (NEW)

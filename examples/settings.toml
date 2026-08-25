@@ -35,7 +35,16 @@ trash = true                      # Right-click a fan thumbnail removes it from 
 [sill.privacy]
 denylist = [
   "org.keepassxc.KeePassXC",
-  "1Password",
+  "1Password.*",
+  "Bitwarden",
+  "Alacritty",
+  "kitty",
+  "foot",
+  "org.codeberg.dnkl.foot",
+  "com.mitchellh.ghostty",
+  "wezterm",
+  "org.omarchy.terminal",
+  "TUI[.].*",
 ]
 
 [bar.drawer]
