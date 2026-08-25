@@ -159,6 +159,14 @@ class ClipboardTab:
         while child:
             nxt = child.get_next_sibling()
             self.listbox.remove(child)
+            # MEMORY: run_dispose() is required, not optional. A row's
+            # event-controller closures reference Python objects while the
+            # widget (C side) holds the controller — a ref cycle crossing
+            # the C boundary that Python's GC cannot traverse. Without
+            # disposing, every render leaked every row (~1.7 MB/render,
+            # found at 1.4 GB peak). run_dispose drops the controllers and
+            # breaks the cycle deterministically.
+            child.run_dispose()
             child = nxt
 
         entries = self.visible_entries()
@@ -343,7 +351,10 @@ class ClipboardTab:
                 return None
 
         def begin(s, _drag):
-            s.set_icon(Gtk.WidgetPaintable.new(widget), 24, 12)
+            # s.get_widget(), NOT a captured `widget`: capturing the widget
+            # in a controller closure recreates the uncollectable
+            # widget->controller->closure->widget cycle (see render()).
+            s.set_icon(Gtk.WidgetPaintable.new(s.get_widget()), 24, 12)
             self.app.cancel_collapse()
 
         src.connect("prepare", prepare)

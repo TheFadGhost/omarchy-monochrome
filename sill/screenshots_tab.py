@@ -116,7 +116,10 @@ class ScreenshotsTab:
             return providers.for_image_file(path)
 
         def begin(s, _drag):
-            paintable = Gtk.WidgetPaintable.new(widget)
+            # s.get_widget(), NOT the captured `widget` — a controller
+            # closure referencing its own widget creates an uncollectable
+            # cross-C ref cycle (leak; see clipboard_tab.render()).
+            paintable = Gtk.WidgetPaintable.new(s.get_widget())
             s.set_icon(paintable, 32, 24)
             self.app.cancel_collapse()
 
@@ -334,6 +337,9 @@ class ScreenshotsTab:
         while child:
             nxt = child.get_next_sibling()
             self.fan.remove(child)
+            # MEMORY: break the widget->controller->closure->widget cycle
+            # that Python's GC cannot see (see clipboard_tab.render()).
+            child.run_dispose()
             child = nxt
         if len(self.shots) > 1:
             for i, path in enumerate(self.shots):

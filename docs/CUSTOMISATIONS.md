@@ -610,6 +610,23 @@ live. Tests: `python3 ~/.local/share/sill/test_store_clipboard.py` (41
 asserts over the normaliser, schema guard, prune, purge, denylist matcher;
 uses env-seam temp dirs, never the real store).
 
+**THE PyGObject LEAK (found at a 1.4 GB memory peak, 8 GB machine).** A row
+widget re-rendered on every clipboard event leaked ~1.7 MB *per render* and
+`gc.collect()` reclaimed nothing. Cause: an event-controller closure that
+references the widget it is attached to (the drag-begin handler captured
+`widget` for `Gtk.WidgetPaintable.new(widget)`). The cycle is
+widget →(C ref)→ controller →(closure)→ widget-wrapper →(toggle ref)→ widget;
+Python's GC cannot traverse the C edges, so removed rows lived forever. Two
+rules, now applied in all three tabs:
+1. a controller closure must never capture its own widget — use
+   `controller.get_widget()` inside the handler instead;
+2. when clearing a list, call `child.run_dispose()` after `remove(child)` —
+   it drops the controllers and breaks any remaining cycle deterministically
+   (that is what `run_dispose` is for in language bindings).
+Verified: 30 forced store reloads, RSS flat (was +70 MB), object-count delta
+zero. Watch `systemctl --user status sill` — the "Memory:" line creeping is
+the symptom.
+
 ### 6c. Bar layout
 
 ```
@@ -736,6 +753,90 @@ voxtype routing. `~/.config/voxtype/config.toml` was not touched.
 - Licence: piper is GPL-3.0 but is invoked as a separate binary over a pipe, so
   it does not affect Luna's MIT licence.
 
+### 8a.2 Luna voice pipeline (Phase 1, 2026-08-25)
+
+Voice out (piper -> aplay) and voice in (voxtype `luna` profile -> `lunad`).
+Keybind **SUPER+ALT+L** = `voxtype record toggle --profile luna`. Plain
+dictation (F9, SUPER+CTRL+X) is untouched and was regression-tested.
+
+Files: `~/Work/luna/lunad/{speech,piper_worker,session}.py`,
+`~/Work/luna/bin/luna-voice-router`, `[profiles.luna]` appended to
+`~/.config/voxtype/config.toml` (backup at `config.toml.pre-luna`),
+one bind appended to `~/.config/hypr/bindings.lua`.
+
+**GOTCHA - voxtype does not re-read its config.** Symptom: you add
+`[profiles.luna]`, `voxtype record start --profile luna` succeeds, and the
+journal then says `Profile 'luna' not found in config, using default settings`
+- so the transcript is TYPED into the focused window instead of going to Luna.
+The CLI reads config.toml live (it will list the profile), but the *daemon*
+only reads it at startup. `systemctl --user restart voxtype` after any config
+edit. This silently degrades to plain dictation; nothing errors.
+
+**GOTCHA - `voxtype config` never prints profiles.** Symptom: you add a profile,
+`voxtype config` looks identical, and you conclude it was ignored. It was not.
+The only CLI proof that a profile exists is
+`voxtype record start --profile __nonexistent__`, which answers with
+`Available profiles: luna`.
+
+**GOTCHA - `fallback_on_empty` cannot be turned off for a profile.** Symptom:
+the post-process hook returns nothing (correct for Luna, whose reply is spoken,
+not typed) and voxtype delivers the ORIGINAL transcript anyway:
+`Post-process command returned empty output, using original text`. `struct
+Profile` in voxtype 0.7.5 carries only `post_process_command`,
+`post_process_timeout_ms` and `output_mode`. Adding a global
+`[output.post_process] fallback_on_empty = false` fails outright -
+`missing field 'command'` - and supplying a global command would route plain
+dictation through Luna too. **The fallback cannot be disabled; it can only be
+aimed somewhere harmless.** That is why the profile sets
+`output_mode = "clipboard"`: the fallback transcript lands on the clipboard
+instead of being typed into whatever window has focus. Verified: 66 chars to
+clipboard, 0 bytes typed.
+
+**GOTCHA - a stale `cancel` trigger file eats the NEXT recording.** Symptom:
+`voxtype record start` is immediately followed by `Recording cancelled` 0.1 s
+later, with no explanation. Cause: `voxtype record cancel` while idle leaves
+`$XDG_RUNTIME_DIR/voxtype/cancel` behind, and the daemon consumes it on the
+next start. Fix: `rm -f /run/user/1000/voxtype/cancel`. The profile is passed
+the same way, via `$XDG_RUNTIME_DIR/voxtype/profile_override` (deleted on read).
+
+**GOTCHA - the voice router must never fail.** voxtype types the raw transcript
+on non-zero exit, spawn failure, or timeout. `bin/luna-voice-router` therefore
+catches `BaseException`, always exits 0, prints nothing, strips C0 control
+bytes, and hands off to `lunad` with `detach` rather than waiting for a reply
+(post_process_timeout_ms is 2000; Luna takes seconds). Measured hand-off: 30 ms.
+
+**GOTCHA - piper streams one audio chunk per sentence, not continuously.**
+Symptom: a long single sentence produces no audio until it is fully
+synthesised. `PiperVoice.synthesize()` yields one `AudioChunk` per sentence, so
+sentence splitting is what makes streaming work at all. Luna caps a unit at 260
+chars. Measured warm: first audio at **45 ms** for a 14.3 s reply.
+
+**GOTCHA - the sample rate lives in the voice's `.onnx.json`,** under
+`audio.sample_rate`. Hard-coding 22050 works for jenny_dioco and silently
+pitch-shifts the next voice. `aplay -r <rate> -f S16_LE -c 1 -t raw -`.
+
+**GOTCHA - `lunad`'s cgroup memory jumps to ~470 MB while speaking.** That is
+the piper child (331 MB of python + onnxruntime) plus page cache for the 61 MB
+model, not a leak. It returns to ~13 MB after the five-minute idle unload,
+which is logged as `unloading piper reason=idle 303s`.
+
+**GOTCHA - `pkill -f <string>` kills your own shell** when the string appears in
+the shell's own command line. Cost a session mid-test. Use `hyprctl clients` to
+find a window and kill by its PID.
+
+**Cost correction, and it is a big one.** The Phase 0 note "separate processes
+never share a prompt cache, so every ask costs ~$0.05" was **wrong about the
+cause**. Anthropic's prompt cache is keyed on the prompt *prefix* and is shared
+across processes; a fresh `claude -p` gets a cache read (measured:
+`cache_read_input_tokens: 4510` on a brand-new session id). The real fault was
+that tier-2 recall was appended to the *end of the system prompt*, so the whole
+~5.5k-token cached prefix was invalidated and re-created on every single ask.
+Moving recall into the user message fixed it: **$0.0513/ask before (n=7),
+$0.0096/ask after (n=13)**. Session resume (`--session-id`/`--resume`) was also
+implemented and is on by default, but its own effect is within noise
+($0.0232 vs $0.0289 over three turns) - it is kept for conversational
+continuity, not for the money.
+
 ## 9. Full inventory of changed/created files
 
 ```
@@ -769,6 +870,14 @@ voxtype routing. `~/.config/voxtype/config.toml` was not touched.
 ~/Work/luna/                          Luna: lunad package, bin/luna, tests (NEW)
 ~/.local/share/luna/                  Luna state: memory/, luna.log          (NEW)
 ~/.config/systemd/user/lunad.service                                        (NEW)
+~/Work/luna/lunad/speech.py           piper worker, stripper, sentence split (NEW)
+~/Work/luna/lunad/piper_worker.py     runs under .venv python, framed audio   (NEW)
+~/Work/luna/lunad/session.py          conversation session reuse              (NEW)
+~/Work/luna/bin/luna-voice-router     voxtype post_process hook, always exit 0 (NEW)
+~/.local/share/luna/voice-router.log  router breadcrumbs                      (NEW)
+~/.config/voxtype/config.toml         + [profiles.luna] ONLY (additive)
+~/.config/voxtype/config.toml.pre-luna  byte-identical backup                 (NEW)
+~/.config/hypr/bindings.lua           + SUPER+ALT+L "Talk to Luna"
 ```
 
 Nothing under `/usr/share/omarchy/` was modified, no Hyprland plugin installed,
@@ -809,6 +918,15 @@ sudo systemctl enable --now cups.service cups.socket avahi-daemon.service
 systemctl --user disable --now lunad.service
 rm -f ~/.config/systemd/user/lunad.service && systemctl --user daemon-reload
 rm -rf ~/.local/share/luna          # memory + log; ~/Work/luna is the source, keep it
+
+# Luna voice (Phase 1) -- do this BEFORE the Phase 0 block if undoing both
+cp ~/.config/voxtype/config.toml.pre-luna ~/.config/voxtype/config.toml
+rm -f ~/.config/voxtype/config.toml.pre-luna
+systemctl --user restart voxtype    # REQUIRED: the daemon never re-reads config
+# then delete the SUPER+ALT+L "Talk to Luna" bind at the end of bindings.lua
+hyprctl reload
+rm -rf ~/Work/luna/.venv            # 198 MB piper install
+rm -rf ~/.local/share/luna/voices   # 61 MB voice model
 
 # Nuclear
 omarchy refresh hyprland && omarchy refresh shell

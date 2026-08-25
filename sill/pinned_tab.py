@@ -100,7 +100,10 @@ class PinnedTab:
                 return None
 
         def begin(s, _drag):
-            s.set_icon(Gtk.WidgetPaintable.new(widget), 24, 12)
+            # s.get_widget(), NOT a captured `widget` — a controller closure
+            # must never reference the widget it is attached to (leak; see
+            # clipboard_tab.render()).
+            s.set_icon(Gtk.WidgetPaintable.new(s.get_widget()), 24, 12)
             self.app.cancel_collapse()
 
         src.connect("prepare", prepare)
@@ -152,6 +155,9 @@ class PinnedTab:
         while child:
             nxt = child.get_next_sibling()
             self.listbox.remove(child)
+            # MEMORY: break the widget->controller->closure->widget cycle
+            # that Python's GC cannot see (see clipboard_tab.render()).
+            child.run_dispose()
             child = nxt
         n = len(self.store.pins)
         self.count_lbl.set_text(f"{n} pinned" if n else "")
