@@ -29,7 +29,7 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 import providers  # noqa: E402
 import store_clipboard  # noqa: E402
-from screenshots_tab import pin_size, thumb  # noqa: E402
+from screenshots_tab import drop_paintables, pin_size, thumb  # noqa: E402
 
 HEX_RE = re.compile(r"#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\Z")
 URL_RE = re.compile(r"(https?://)([^/\s]+)(\S*)\Z")
@@ -74,7 +74,7 @@ class ClipboardTab:
     # ---------------- store events ----------------
     def _on_store_change(self):
         self.render()
-        self.app.update_chip()
+        self.app.content_changed()
 
     def visible_entries(self):
         """Display filter: newest `max_items` within `max_age_days`. The
@@ -146,7 +146,7 @@ class ClipboardTab:
         # feels instant.
         self.store.load(initial=True)
         self.render()
-        self.app.update_chip()
+        self.app.content_changed()
 
     # ---------------- render ----------------
     def render(self):
@@ -166,6 +166,8 @@ class ClipboardTab:
             # disposing, every render leaked every row (~1.7 MB/render,
             # found at 1.4 GB peak). run_dispose drops the controllers and
             # breaks the cycle deterministically.
+            # CRASH: paintables first, then dispose -- see drop_paintables().
+            drop_paintables(child)
             child.run_dispose()
             child = nxt
 
@@ -334,7 +336,7 @@ class ClipboardTab:
         else:
             self.app.pinned_tab.store.add_text(entry.payload)
         self.app.pinned_tab.render()
-        self.app.update_chip()
+        self.app.content_changed()
 
     # ---------------- drag-out ----------------
     def _drag_source_for(self, widget, entry):

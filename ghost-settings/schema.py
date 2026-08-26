@@ -75,7 +75,7 @@ SPEC: tuple[Section, ...] = (
     )),
     Section("sill", "Sill", "panel, tabs, history", (
         NinePoint("position", "Position", default="top-right",
-                  doc="Where the chip and expanded panel anchor.\n"
+                  doc="Where the panel anchors.\n"
                       "NOTE: in Phase 1 the window itself is placed by a\n"
                       "Hyprland rule in ~/.config/hypr/windows.lua; only\n"
                       "top-right is wired up."),
@@ -86,17 +86,13 @@ SPEC: tuple[Section, ...] = (
         Toggle("expand_on_hover", "Expand on hover", default=True,
                doc="Expand when the pointer rests on the bar's empty space\n"
                    "(needs the ghost.sillhover plugin — Phase 5)."),
-        Toggle("expand_on_drag", "Expand on drag", default=True,
-               doc="Expand when a drag hovers the chip (Phase 5)."),
-        Toggle("expand_on_click", "Expand on click", default=True,
-               doc="Expand when the chip is clicked."),
         Number("hover_delay_ms", "Hover delay", default=300, min=0, max=2000,
                step=50, unit="ms", gate="sill.expand_on_hover",
                doc="Delay before a hover expands the panel."),
         Number("collapse_s", "Auto-collapse after", default=15, min=0, max=120,
                unit="s", zero_means="never",
-               doc="Seconds before an auto-expanded panel folds back into\n"
-                   "the chip. 0 = never auto-collapse."),
+               doc="Seconds before an auto-expanded panel collapses again.\n"
+                   "0 = never auto-collapse."),
         Number("max_items", "Max items", default=200, min=10, max=1000,
                step=10, doc="Clipboard entries shown (Phase 2)."),
         Number("max_age_days", "Max age", default=7, min=0, max=90,
@@ -124,7 +120,7 @@ SPEC: tuple[Section, ...] = (
         Toggle("save_as", "Save-as action", default=False,
                doc="Reserved; not implemented in Phase 1."),
         Toggle("drag", "Drag out", default=True,
-               doc="Thumbnails and the chip are drag sources."),
+               doc="Screenshot thumbnails are drag sources."),
         Toggle("trash", "Trash action", default=True,
                doc="Right-click a fan thumbnail removes it from the shelf\n"
                    "(the file on disk is never auto-deleted)."),

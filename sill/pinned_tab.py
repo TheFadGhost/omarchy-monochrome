@@ -13,9 +13,10 @@ URL string and image data lands as the richest type it can. Text is last.
 
 INPUT-REGION POLICY (the R9-independent design): the drop zone never grows
 mid-drag. While the panel is open, the app keeps the input region at the
-panel's full expanded size; while collapsed, the chip itself is the (chip-
-sized) drop target. Trade-off: a smaller drop area when collapsed, in
-exchange for not depending on undefined compositor behaviour (whether
+panel's full expanded size; while collapsed the input region is EMPTY, Sill
+takes no input at all, and there is therefore NO collapsed drop target --
+open the panel first. Trade-off: no drop area when collapsed, in exchange
+for not depending on undefined compositor behaviour (whether
 set_input_region applies to an in-flight drag).
 """
 
@@ -28,7 +29,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, GObject, Gtk  # noqa: E402
 
 import providers  # noqa: E402
-from screenshots_tab import pin_size, thumb  # noqa: E402
+from screenshots_tab import drop_paintables, pin_size, thumb  # noqa: E402
 from store_pins import PinStore  # noqa: E402
 
 
@@ -157,6 +158,8 @@ class PinnedTab:
             self.listbox.remove(child)
             # MEMORY: break the widget->controller->closure->widget cycle
             # that Python's GC cannot see (see clipboard_tab.render()).
+            # CRASH: paintables first, then dispose -- see drop_paintables().
+            drop_paintables(child)
             child.run_dispose()
             child = nxt
         n = len(self.store.pins)

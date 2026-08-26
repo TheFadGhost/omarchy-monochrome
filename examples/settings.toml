@@ -9,14 +9,12 @@ follow_theme = true               # Recolour components when the Omarchy theme c
 animations = true                 # Master switch; any per-app "follow" resolves to this.
 
 [sill]
-position = "top-right"            # Where the chip and expanded panel anchor. · top-left|top|top-right|left|center|right|bottom-left|bottom|bottom-right
+position = "top-right"            # Where the panel anchors. · top-left|top|top-right|left|center|right|bottom-left|bottom|bottom-right
 margin = 60                       # Gap between the panel and the screen edge. · (0-128) px
 keybind_toggle = true             # SUPER+SHIFT+V toggles the panel (bound in bindings.lua).
 expand_on_hover = true            # Expand when the pointer rests on the bar's empty space
-expand_on_drag = true             # Expand when a drag hovers the chip (Phase 5).
-expand_on_click = true            # Expand when the chip is clicked.
 hover_delay_ms = 300              # Delay before a hover expands the panel. · (0-2000) ms
-collapse_s = 15                   # Seconds before an auto-expanded panel folds back into · (0-120) s · 0 = never
+collapse_s = 15                   # Seconds before an auto-expanded panel collapses again. · (0-120) s · 0 = never
 max_items = 200                   # Clipboard entries shown (Phase 2). · (10-1000)
 max_age_days = 7                  # Drop clipboard entries older than this (Phase 2). · (0-90) days · 0 = keep forever
 disable_omarchy_clipboard = false # Unbind SUPER+CTRL+V only. The Quickshell plugin stays
@@ -29,7 +27,7 @@ edit = true                       # Show the Edit button (OMARCHY_SCREENSHOT_EDI
 ocr = false                       # Reserved; not implemented in Phase 1.
 share = false                     # Reserved; not implemented in Phase 1.
 save_as = false                   # Reserved; not implemented in Phase 1.
-drag = true                       # Thumbnails and the chip are drag sources.
+drag = true                       # Screenshot thumbnails are drag sources.
 trash = true                      # Right-click a fan thumbnail removes it from the shelf
 
 [sill.privacy]

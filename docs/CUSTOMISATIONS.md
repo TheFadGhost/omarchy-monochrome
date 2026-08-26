@@ -296,7 +296,18 @@ theme automatically.
   which `Image.source` accepts directly. `cliamp` publishes no art, and
   declares a short `mpris:length` for long mixes, so its progress bar often
   pins full. Both are upstream metadata quirks, not widget bugs.
-- A *"File name case mismatch"* warning for these modules is **benign**.
+- A *"File name case mismatch"* warning for these modules is **usually
+  benign — but it is also the ONLY symptom of a module that will never load.**
+  Corrected 2026-08-26, after this note cost most of an agent's session. The
+  QML engine caches the directory listing of `~/.config/omarchy/bar/modules/`
+  at startup, so a **newly added** module file is not in that listing and its
+  `Loader.item` stays null forever: the slot never appears in
+  `omarchy-shell shell debugBarGeometry`, the file compiles fine, and this
+  warning is all you get. Proof it is the cache and not the file: the identical
+  file loaded instantly when pointed at via a `"source"` setting in a directory
+  the engine had never listed. **A new bar module requires
+  `omarchy-restart-shell`; so does editing an existing one.** Treat the warning
+  as benign only for modules that are already rendering.
 - `xkbcomp: Key <LFSH> added to map for multiple modifiers` is **benign** and
   pre-existing — it comes from Omarchy's own `shift:both_capslock_cancel`.
 
@@ -659,6 +670,45 @@ rules, now applied in all three tabs:
 2. when clearing a list, call `child.run_dispose()` after `remove(child)` —
    it drops the controllers and breaks any remaining cycle deterministically
    (that is what `run_dispose` is for in language bindings).
+
+**And the rule above has a trap that caused a 7-crash outage (2026-08-26) —
+latent in shipped code since Phase 1, not introduced by the edit that exposed
+it.** `child.run_dispose()` is still required, but on any subtree that may
+contain a `Gtk.Picture` you must **clear the paintables first**:
+
+    drop_paintables(child)   # recursive: every Gtk.Picture -> set_paintable(None)
+    child.run_dispose()
+
+The mechanism, from `PYTHONFAULTHANDLER` (see below): `drop_shot()` calls
+`forget_thumbs()` **first**, which drops the `_THUMBS` cache entry, so the
+fan's `Gtk.Picture` is left holding the LAST reference to the `Gdk.Texture`.
+`render()` then calls `run_dispose()` on that widget, which releases the
+texture — and GObject runs dispose a SECOND time on the final unref, reading
+the already-freed paintable. C stack ends
+`g_object_unref → gtk → gdk_paintable_get_flags → SEGV_MAPERR`.
+
+So the ownership rule is: **a cached texture is referenced by both `_THUMBS`
+and the widget, and either one can be the last holder.** "A widget I am
+discarding" is therefore not a safe test for `run_dispose()`. The same
+exposure exists in the clipboard and pinned tabs via the 64-entry LRU
+eviction in `thumb()`, and `drop_paintables()` is called before every
+`run_dispose()` in all three.
+
+The symptom is diagnostic: **it does not crash at startup**, and it does not
+crash in normal use. It needs a held screenshot to be deleted from outside
+Sill (or evicted from the LRU) while a widget still shows it — which is why
+it sat unfired for months and then fired seven times in six minutes once
+something started creating and deleting test captures. It reads as "the last
+edit broke it" and that reading is wrong.
+
+**Debugging note: `PYTHONFAULTHANDLER=1` beats `coredumpctl` here.** Arch
+ships no python-gdb helpers, so a core gives C frames only and the Python
+frame chain has to be walked by hand out of the interpreter state. The
+faulthandler prints the offending Python file and line directly.
+
+The fix is NOT to pin cache entries alive — that reintroduces the leak this
+section exists to prevent. Verified flat: 208 MB → 212 MB over 22 stress
+cycles.
 Verified: 30 forced store reloads, RSS flat (was +70 MB), object-count delta
 zero. Long-run confirmation: after 12 h of live uptime `systemctl --user
 status sill` reported Memory 45.2 M (peak 46.7 M) — flat, so the fix holds
@@ -734,6 +784,66 @@ read-only (`Variants.instances`, items with `region`); an omarchy update
 renaming those internals makes every lookup fail *soft* — hover-expand
 silently stops while click/keybind expansion keep working. After a major
 update, hover the gap left of `sysmon` and watch the state file.
+
+#### Phase 6 — Sill moves into the bar (2026-08-26)
+
+The floating collapsed "chip" that used to hover just below the bar is
+**gone**. Sill is now summoned from a real bar module, and collapsed means
+nothing is drawn at all.
+
+*Why it was ever a floating pill:* Sill must be a GTK4 `xdg_toplevel` (a
+layer surface cannot originate a cross-app drag — §6e), so it could not be a
+bar widget, and it faked attachment by parking its own window at y = 44 + 2.
+The user read that, reasonably, as a bug: anything with an icon belongs in the
+bar. The split now is **bar icon in Quickshell, panel in GTK** — the module
+only runs `sill toggle` and draws a badge; it never tries to own the panel.
+
+| Piece | Path |
+|---|---|
+| Bar module | `~/.config/omarchy/bar/modules/sill.qml` |
+| Registration | `~/.config/omarchy/shell.json` → `bar.layout.right`, after `notes` |
+| Pending count | `~/.local/state/ghost/sill-pending` (single ASCII int, atomic writes) |
+
+`BarWidget` wrapping `qs.Ui`'s `BarIconButton`, so the hover cursor and the
+`bar.showTooltip` come from the first-party component rather than being
+re-drawn. Icon is `nf-md-inbox`: the literal choice, `nf-md-tray`, collapses
+into a thin unreadable bracket at the real `Style.bar.iconFont` size — check a
+glyph at actual size before committing to it, not in isolation.
+
+**The badge is not decoration.** `ghost-capture` suppresses Omarchy's
+screenshot toast (§6e), and the chip used to be the only other "a capture
+happened" signal. The dot on this icon is now the ONLY one. If it regresses,
+screenshots become completely silent. Verified end to end: file appears in
+~/Pictures → `sill-pending` = 1 within 1 s and holds → dot renders top-right
+of the glyph → file deleted → back to 0.
+
+**Gotchas, all of which cost real time:**
+
+- **A brand-new bar module cannot be hot-loaded.** See the corrected note in
+  §6b — the engine caches the modules directory listing, so the file compiles,
+  loads nothing, and the only symptom is the "File name case mismatch" warning
+  this document previously called benign. `omarchy-restart-shell` is required
+  for a new module, and for edits to an existing one.
+- **`FileView.watchChanges` signals but does not re-read.** Without
+  `onFileChanged: reload()` the badge updates exactly once and then never
+  moves again — which looks like a producer bug and is not.
+- **`FileView` never arms if the file's parent directory does not exist** when
+  `path` is first assigned: `onLoadFailed` fires once and it is dead forever.
+  `sill.qml` withholds `path` until a one-shot `mkdir -p` Process returns.
+  `~/.local/state/ghost/` is created by Sill too, but the bar can start first.
+- A single-file `FileView` watch was verified to survive create, in-place
+  write, repeated atomic rename-replace, and delete-then-recreate, so no
+  directory watch was needed. Tested against a throwaway quickshell instance.
+
+**Settings fallout:** `sill.expand_on_drag` ("expand when a drag hovers the
+chip") and `sill.expand_on_click` ("expand when the chip is clicked") are both
+removed — there is no chip, a Quickshell layer surface cannot receive a drag,
+and the bar module's own click already calls `sill toggle`. Both were verified
+to have zero remaining consumers before deletion. `sill.expand_on_hover` and
+the `ghost.barhover` plugin are unaffected: hovering the bar's empty space
+still expands the panel. A settings.toml still carrying the old keys loads
+without warnings — they land in `_unknown`, are skipped by `diff()`, and
+survive a save round-trip.
 
 ### 6c. Bar layout
 
@@ -999,8 +1109,10 @@ Undo: see §10 — delete the three installed paths and the two Lua blocks.
 ~/.config/omarchy/bar/modules/{sysmon,pomodoro,notes}.qml             (NEW)
 ~/.config/omarchy/bar/modules/mediapill.qml   replaces omarchy.media  (NEW)
 ~/.config/omarchy/bar/modules/drawer.qml      icon drawer (wifi/sound/bt/display) (NEW)
+~/.config/omarchy/bar/modules/sill.qml        Sill toggle + pending badge      (NEW)
 ~/.local/share/sill/                  Sill: clipboard + screenshots + pins (NEW)
 ~/.local/share/sill/seen.json         text first-seen sidecar (TTL)   (NEW)
+~/.local/state/ghost/sill-pending     capture-count badge feed for the bar (NEW)
 ~/.local/bin/{sill,ghost-capture}                                     (NEW)
 ~/.config/ghost/settings.toml        Sill config, live-reloaded      (NEW)
 ~/.config/ghost/flags/               bind flag files, written by Sill (NEW)
@@ -1056,6 +1168,9 @@ rm -rf ~/.config/omarchy/plugins/ghost.barisland ~/.config/omarchy/bar
 systemctl --user disable --now sill.service
 rm -f ~/.config/systemd/user/sill.service
 rm -rf ~/.local/share/sill ~/.local/bin/sill ~/.local/bin/ghost-capture ~/.config/ghost
+rm -f ~/.config/omarchy/bar/modules/sill.qml ~/.local/state/ghost/sill-pending
+# then drop the {"id":"sill","type":"qml"} entry from shell.json bar.layout.right
+# and omarchy-restart-shell (a removed module is NOT hot-unloaded either)
 rm -f ~/.config/hypr/windows.lua   # and drop require("hypr.windows") from hyprland.lua
 omarchy restart shell
 

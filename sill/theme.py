@@ -9,6 +9,7 @@ inner colors.toml monitor after every rebuild.
 """
 
 import os
+import re
 import subprocess
 
 import gi
@@ -20,6 +21,12 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 HOME = os.path.expanduser("~")
 THEME_DIR = os.path.join(HOME, ".local/state/omarchy/current/theme")
 
+# Mirrors ~/.config/hypr/looknfeel.lua (rounding = 10, border_size = 2).
+# If that changes, change these — they are not read from Hyprland at
+# runtime because hyprctl getoption costs a fork per re-theme.
+WINDOW_RADIUS_PX = 10
+WINDOW_BORDER_PX = 2
+
 # No-theme fallbacks only — at runtime colours come from the live colors.toml.
 FALLBACK = {
     "background": "#0a0a0b",
@@ -28,6 +35,22 @@ FALLBACK = {
     "lighter_background": "#16181a",
     "dark_foreground": "#565c60",
 }
+
+
+def border_from_hypr(spec):
+    """`rgba(dfe3e6cc) rgba(6b7276cc) 45deg` -> `alpha(#dfe3e6, 0.80)`.
+
+    GTK CSS has no gradient *border-color*, so only the first stop is used —
+    that is the active-border colour, which is what a focused window shows.
+    Returns None if the spec is a form we do not recognise, and the caller
+    falls back to the foreground.
+    """
+    m = re.search(r"rgba?\(\s*([0-9a-fA-F]{6})([0-9a-fA-F]{2})?\s*\)", spec)
+    if not m:
+        return None
+    rgb, aa = m.group(1), m.group(2)
+    alpha = int(aa, 16) / 255 if aa else 1.0
+    return f"alpha(#{rgb}, {alpha:.2f})"
 
 
 def read_theme():
@@ -45,6 +68,12 @@ def read_theme():
     for k, v in raw.items():
         if isinstance(v, str) and v.startswith("#"):
             colors[k] = v
+    # Not a bare #hex, so the loop above skips it: Hyprland's own window border,
+    # e.g. 'rgba(dfe3e6cc) rgba(6b7276cc) 45deg'. Sill's card matches the
+    # tiled windows' chrome, so it needs the same colour, not an fg guess.
+    hb = raw.get("hyprland_active_border")
+    if isinstance(hb, str):
+        colors["_border"] = border_from_hypr(hb)
     return colors
 
 
@@ -62,10 +91,15 @@ def current_font():
 
 def css_for(c, animations=True):
     fg, bg = c["foreground"], c["background"]
+    # Match the tiled windows' chrome exactly: looknfeel.lua sets
+    # rounding = 10 / border_size = 2, and the border colour comes from the
+    # theme's hyprland_active_border. Anything else reads as a foreign card
+    # floating over the layout instead of another window in it.
+    border = c.get("_border") or f"alpha({fg}, 0.80)"
     font = current_font()
     trans = (
         """
-    .panel, .chip {
+    .panel {
         transition: opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
                     transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
     }
@@ -73,17 +107,15 @@ def css_for(c, animations=True):
     return f"""
     window {{ background: transparent; }}
     * {{ font-family: "{font}", monospace; }}
-    .panel, .chip {{
+    .panel {{
         background: {bg};
-        border: 1px solid alpha({fg}, 0.20);
-        border-radius: 12px;
+        border: {WINDOW_BORDER_PX}px solid {border};
+        border-radius: {WINDOW_RADIUS_PX}px;
+        padding: 12px;
     }}
-    .panel {{ padding: 12px; }}
-    .chip  {{ padding: 5px 10px; }}
     {trans}
-    .panel, .chip {{ opacity: 1; transform: scale(1); }}
+    .panel {{ opacity: 1; transform: scale(1); }}
     .panel.off {{ opacity: 0; transform: scale(0.94); }}
-    .chip.off  {{ opacity: 0; transform: scale(1.10); }}
     .heading {{
         color: alpha({fg}, 0.55);
         font-size: 10px;

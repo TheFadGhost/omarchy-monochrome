@@ -56,6 +56,29 @@ def forget_thumbs(path):
         _THUMBS.pop(key, None)
 
 
+def drop_paintables(widget):
+    """Unset every Gtk.Picture paintable in `widget`'s tree.
+
+    MUST be called before run_dispose() on anything that may contain a
+    picture. run_dispose() is itself required (it breaks the
+    widget->controller->closure->widget cycle Python's GC cannot see), but
+    GObject runs dispose a SECOND time on the final unref, and a Gtk.Picture
+    torn down while it holds the LAST reference to its Gdk.Texture faults
+    there in gdk_paintable_get_flags() on freed memory -- a reliable SIGSEGV,
+    not a rare race. It is reached whenever the cache stops holding the
+    texture too: forget_thumbs() on a deleted or renamed screenshot, or the
+    64-entry LRU eviction in thumb(). Clearing the paintable first releases
+    the texture through the normal path while the widget is still whole.
+    """
+    if isinstance(widget, Gtk.Picture):
+        widget.set_paintable(None)
+        return
+    kid = widget.get_first_child()
+    while kid:
+        drop_paintables(kid)
+        kid = kid.get_next_sibling()
+
+
 def pin_size(widget, w, h):
     """Pin both axes so a thumbnail stays a thumbnail."""
     widget.set_size_request(w, h)
@@ -201,13 +224,22 @@ class ScreenshotsTab:
         page.append(self.body)
 
         self.acts = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        for label, gate, cb in (
-            ("Copy path", "copy", self.copy_path),
-            ("Copy image", "copy", self.copy_image),
-            ("Edit", "edit", self.open_editor),
+        # "Clear" lives here because the collapsed floating pill it used to
+        # hang off is gone. Without it a single held screenshot could never
+        # be dismissed (the fan's right-click only appears from two up), and
+        # the bar module's pending count would stick.
+        for label, gate, tip, cb in (
+            ("Copy path", "copy", None, self.copy_path),
+            ("Copy image", "copy", None, self.copy_image),
+            ("Edit", "edit", None, self.open_editor),
+            ("Clear", "trash", "Dismiss every screenshot in the shelf"
+                               " (files on disk are untouched)",
+             self.clear_all),
         ):
             b = Gtk.Button(label=label)
             b.add_css_class("act")
+            if tip:
+                b.set_tooltip_text(tip)
             b.connect("clicked", lambda _w, f=cb: f())
             b._gate = gate
             self.acts.append(b)
@@ -327,7 +359,7 @@ class ScreenshotsTab:
         self.fan.set_visible(len(self.shots) > 1)
         if not has:
             self.stamp_lbl.set_text("")
-            self.app.sync_input_region_soon()
+            self.app.content_changed()
             return
 
         self.name_lbl.set_text(os.path.basename(cur))
@@ -338,6 +370,8 @@ class ScreenshotsTab:
         while child:
             nxt = child.get_next_sibling()
             self.fan.remove(child)
+            # CRASH: paintables first, then dispose -- see drop_paintables().
+            drop_paintables(child)
             # MEMORY: break the widget->controller->closure->widget cycle
             # that Python's GC cannot see (see clipboard_tab.render()).
             child.run_dispose()
@@ -369,7 +403,7 @@ class ScreenshotsTab:
                 g.connect("released", clicked)
                 pic.add_controller(g)
                 self.fan.append(pic)
-        self.app.sync_input_region_soon()
+        self.app.content_changed()
 
     @staticmethod
     def stamp_of(path):

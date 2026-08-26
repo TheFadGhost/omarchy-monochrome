@@ -53,6 +53,10 @@
           "type": "qml"
         },
         {
+          "id": "sill",
+          "type": "qml"
+        },
+        {
           "id": "omarchy.tray"
         },
         {
