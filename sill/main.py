@@ -416,13 +416,48 @@ class Sill(Adw.Application):
 
     def _apply_state(self):
         if self.expanded:
-            self.panel.remove_css_class("off")
+            # Map BEFORE the fade: a hidden window cannot animate, and the
+            # collapse path below unmaps it (see _settle_state).
+            if not self.win.get_visible():
+                self.win.set_visible(True)
+                # Let the mapped-but-off frame render once, or GTK coalesces
+                # map+class-change and the transition is skipped entirely.
+                GLib.timeout_add(16, self._uncover)
+            else:
+                self.panel.remove_css_class("off")
         else:
             self.panel.add_css_class("off")
         self.panel.set_can_target(self.expanded)
         # Re-cut the input region once the motion settles on its new size.
-        GLib.timeout_add(280, self._sync_region_once)
+        GLib.timeout_add(280, self._settle_state)
         self.sync_input_region()
+
+    def _uncover(self):
+        if self.expanded:
+            self.panel.remove_css_class("off")
+        return False
+
+    def _settle_state(self):
+        """Runs once the expand/collapse motion has finished.
+
+        CLICK-THROUGH: an empty Wayland input region is NOT sufficient on its
+        own here. The canvas is a 560x720 floating+pinned toplevel that sits
+        above every tiled window, and with the region alone the user could
+        neither hover nor click anything inside that rectangle — a quarter of
+        the screen, silently dead, with nothing drawn to explain why. The
+        region is still set (cheap, and correct while expanded), but the
+        collapsed state additionally UNMAPS the surface, which is the only
+        thing that reliably stops it intercepting the pointer.
+
+        Unmapping is safe here and is already the app's own idiom: it is how
+        Sill forces Hyprland to re-apply its window rules after a position
+        change (rules apply at map time only). `no_anim`/`no_initial_focus`
+        in windows.lua mean the re-map neither animates nor steals focus.
+        """
+        self.sync_input_region()
+        if not self.expanded and self.win.get_visible():
+            self.win.set_visible(False)
+        return False
 
     def schedule_collapse(self):
         """Arm the auto-collapse timer — only for auto-expanded panels; a
@@ -691,7 +726,10 @@ class Sill(Adw.Application):
         return False
 
     def _sync_region_once(self):
-        self.sync_input_region()
+        # Startup lands here collapsed, so this also unmaps the canvas —
+        # otherwise it swallows the pointer from launch until the first
+        # expand/collapse cycle.
+        self._settle_state()
         return False
 
     def sync_input_region(self):

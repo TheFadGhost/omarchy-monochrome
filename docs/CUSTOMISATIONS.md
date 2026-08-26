@@ -817,6 +817,35 @@ screenshots become completely silent. Verified end to end: file appears in
 ~/Pictures → `sill-pending` = 1 within 1 s and holds → dot renders top-right
 of the glyph → file deleted → back to 0.
 
+**THE click-through gotcha — an empty Wayland input region is NOT enough.**
+Sill's canvas is a 560x720 `float`+`pin` toplevel that stacks above every
+tiled window. `sync_input_region()` sets an empty `cairo.Region()` when
+collapsed, which is correct and still done — and it did **not** stop the
+window intercepting the pointer. Symptom, reported from a real session: a
+560x720 rectangle at the top-right (a quarter of the screen) where you can
+neither hover nor click anything underneath, with **nothing drawn to explain
+why** — in the report it was a Files window whose folder icons simply would
+not respond. Nothing in the logs, because from the app's point of view
+everything is working.
+
+The fix is to **unmap the surface** when the collapse motion finishes
+(`_settle_state`: `self.win.set_visible(False)`), and map it again at the
+start of an expand. Verified the honest way: `hyprctl clients` lists
+`dev.ghost.sill` while expanded and lists **nothing at all** while collapsed
+— a window that does not exist cannot eat a click.
+
+Two details that make unmapping safe rather than clever:
+- It is already this app's own idiom — bouncing surface visibility is how
+  Sill forces Hyprland to re-apply window rules after a position change,
+  since rules apply at map time only.
+- `no_anim` and `no_initial_focus` in `windows.lua` mean the re-map neither
+  animates nor steals focus, so the round trip is invisible.
+- Map **before** the fade and let one frame render (`GLib.timeout_add(16)`)
+  before dropping the `.off` class, or GTK coalesces the map with the class
+  change and the transition is skipped. Startup takes the same path — it
+  begins collapsed, so `_sync_region_once` unmaps too; without that the
+  canvas swallowed the pointer from launch until the first manual cycle.
+
 **Gotchas, all of which cost real time:**
 
 - **A brand-new bar module cannot be hot-loaded.** See the corrected note in
