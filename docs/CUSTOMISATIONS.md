@@ -128,6 +128,8 @@ flag file exists — see below).
 | `SUPER + ALT + T` | tty-clock |
 | `SUPER + SHIFT + V` | Sill panel toggle (skipped if `sill.keybind_toggle=false`) |
 | `SUPER + SHIFT + Delete` | `sill purge` — wipe clipboard history |
+| `F10` | Talk to Luna — `voxtype record toggle --profile luna` |
+| `SUPER + F10` | `luna hush` — cut her off mid-sentence |
 
 **Flag files** (`~/.config/ghost/flags/`): a Hyprland bind cannot read
 `settings.toml`, so Sill mirrors bind-affecting booleans as flag files
@@ -979,8 +981,10 @@ voxtype routing. `~/.config/voxtype/config.toml` was not touched.
 - **Piper TTS installed into a project venv, NOT system-wide.** `~/Work/luna/.venv`
   (198 MB) via `pip install piper-tts`. Reason: `sudo` requires a password on this
   machine, so an unattended AUR build is impossible. Revert with `rm -rf ~/Work/luna/.venv`.
-- **Voice**: `en_GB-jenny_dioco-medium` in `~/.local/share/luna/voices/`
-  (61 MB `.onnx` + 4.8 KB `.onnx.json`). Fallback choice: `en_GB-alba-medium`.
+- **Voice**: speech now goes out through OpenRouter `deepgram/flux-tts:free`,
+  voice `flux-alexis-en`. Piper stays installed underneath as the offline
+  fallback, using `en_GB-jenny_dioco-medium` in `~/.local/share/luna/voices/`
+  (61 MB `.onnx` + 4.8 KB `.onnx.json`).
 - **Measured on this hardware**: cold model load 1.12 s; warm synth 0.41 s for
   6.75 s of audio; **RTF 0.061 (16.4x real time)**; **peak RSS 331 MB**.
 - **GOTCHA - the 331 MB.** The ARCHITECTURE.md budget originally said ~60 MB for
@@ -1003,8 +1007,20 @@ voxtype routing. `~/.config/voxtype/config.toml` was not touched.
 ### 8a.2 Luna voice pipeline (Phase 1, 2026-08-25)
 
 Voice out (piper -> aplay) and voice in (voxtype `luna` profile -> `lunad`).
-Keybind **SUPER+ALT+L** = `voxtype record toggle --profile luna`. Plain
-dictation (F9, SUPER+CTRL+X) is untouched and was regression-tested.
+Keybind **F10** = `voxtype record toggle --profile luna`, with **SUPER+F10** =
+`luna hush` to cut her off mid-sentence. Plain dictation (F9, SUPER+CTRL+X) is
+untouched and was regression-tested.
+
+F10 sits next to F9 on purpose, and the pair reads as one idea: F9 **types**
+what you say into the focused window, F10 **sends** it to Luna. F9 was the only
+F-key bound on this machine, so the row above it was free. Barge-in is
+`SUPER`+that key rather than a bare F11/F12, because a bare F-key bound at the
+compositor is stolen from every application — and F11 is fullscreen, F12 is
+devtools.
+
+**GOTCHA — the F-row must emit real F-keys.** This laptop's F-row is
+media-first unless Fn-lock is on. If it ever reverts, F9 *and* F10 both stop
+firing, and the symptom is "Luna is broken" when nothing about Luna changed.
 
 Files: `~/Work/luna/lunad/{speech,piper_worker,session}.py`,
 `~/Work/luna/bin/luna-voice-router`, `[profiles.luna]` appended to
